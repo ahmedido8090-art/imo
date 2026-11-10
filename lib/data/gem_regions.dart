@@ -3,6 +3,7 @@
 import 'package:flutter/painting.dart';
 
 import '../models/map_models.dart';
+import 'gem_regions_rooms.dart';
 
 List<Offset> _p(List<double> v) => [for (var i = 0; i < v.length; i += 2) Offset(v[i], v[i + 1])];
 
@@ -46,4 +47,9 @@ final List<MapRegion> kRegions = [
   MapRegion(id: 'tg_reception', mapId: 'tutankhamun', name: 'Reception', kind: RegionKind.zone, labelAt: Offset(0.8604, 0.1548), group: 'zone', showLabel: true, points: _p(const [0.7688,0.3042,0.769,0.1397,0.7706,0.1349,0.818,0.1019,0.8188,0.094,0.9173,0.025,0.9173,0.2021,0.9164,0.2075])),
 ];
 
-List<MapRegion> regionsFor(String mapId) => [for (final r in kRegions) if (r.mapId == mapId) r];
+List<MapRegion> regionsFor(String mapId) => [
+  for (final r in kRegions)
+    if (r.mapId == mapId) r,
+  for (final r in kRoomRegions)
+    if (r.mapId == mapId) r,
+];

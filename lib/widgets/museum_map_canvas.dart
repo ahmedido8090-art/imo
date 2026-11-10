@@ -121,7 +121,8 @@ class _Prism {
 double _heightFactor(RegionKind k) => switch (k) {
   RegionKind.building => 0.06,
   RegionKind.attraction => 0.03,
-  RegionKind.hall || RegionKind.zone => 0.024,
+  RegionKind.hall => 0.024,
+  RegionKind.zone => 0.012,
   RegionKind.gallery => 0.028,
   RegionKind.garden || RegionKind.parking => 0,
 };

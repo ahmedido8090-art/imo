@@ -495,7 +495,9 @@ class _MuseumMapScreenState extends State<MuseumMapScreen>
       _askOrigin(then: () => _routeTo(destId, label: label));
       return;
     }
-    if ((kRouteRedirects[destId] ?? destId) == from) {
+    final normFrom = _graph.normalizeNodeId(from);
+    final normTo = _graph.normalizeNodeId(destId);
+    if (normTo == normFrom) {
       if (!quiet) {
         _toast.show(S.t('already_here'), icon: Icons.check_circle_outline);
       }

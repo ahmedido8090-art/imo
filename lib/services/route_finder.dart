@@ -11,6 +11,7 @@ import '../models/map_models.dart';
 // ═══════════════════════════════════════════════════════════════
 
 enum StepKind { start, left, right, enterBuilding, exitBuilding, stairs, lift, arrive, stop }
+enum RouteObjective { shortestDistance, fastestTime }
 
 @immutable
 class RouteStep {
@@ -129,13 +130,22 @@ class _Node {
 }
 
 class _Edge {
-  _Edge(this.to, this.meters, this.cost, {this.stairs = false, this.portal, this.via = const []});
+  _Edge(
+    this.to,
+    this.meters,
+    this.seconds, {
+    required this.id,
+    this.stairs = false,
+    this.portal,
+    this.via = const [],
+  });
+  final String id;
   final String to;
 
   /// Bend points between the two nodes (wall-aware path), normalised.
   final List<Offset> via;
   final double meters; // real length, used for distance/time
-  final double cost; // what the router minimises (stairs are penalised)
+  final double seconds;
   final bool stairs;
   final Portal? portal;
 }
@@ -159,12 +169,12 @@ class MuseumGraph {
 
   /// Average walking speed, m/s.
   static const double walkSpeed = 1.25;
-  static const double _stairsPenalty = 2.5;
   static const double _liftWaitSeconds = 40;
 
   final Map<String, _Node> _nodes = {};
   final Map<String, List<_Edge>> _adj = {};
   final Map<String, MapPlace> _places = {};
+  int _edgeSeq = 0;
 
   // ── build ──────────────────────────────────────────────────────
   /// A place drawn on this map but located on another floor (e.g. the
@@ -237,13 +247,35 @@ class MuseumGraph {
       if (stored != null) via = fwd ? stored : stored.reversed.toList();
     }
     final len = meters ?? _polyLength(m, [na.pos, ...via, nb.pos]) * m.metersPerPixel;
-    final cost = stairs ? len * _stairsPenalty : len;
-    _adj.putIfAbsent(a, () => []).add(_Edge(b, len, cost, stairs: stairs, portal: portal, via: via));
-    _adj.putIfAbsent(b, () => []).add(_Edge(a, len, cost, stairs: stairs, portal: portal, via: via.reversed.toList()));
+    final secs = len / walkSpeed + ((portal?.kind == PortalKind.lift) ? _liftWaitSeconds : 0);
+    final edgeId = 'e${_edgeSeq++}';
+    _adj.putIfAbsent(a, () => []).add(
+      _Edge(
+        b,
+        len,
+        secs,
+        id: edgeId,
+        stairs: stairs,
+        portal: portal,
+        via: via,
+      ),
+    );
+    _adj.putIfAbsent(b, () => []).add(
+      _Edge(
+        a,
+        len,
+        secs,
+        id: edgeId,
+        stairs: stairs,
+        portal: portal,
+        via: via.reversed.toList(),
+      ),
+    );
   }
 
   // ── helpers ────────────────────────────────────────────────────
   bool has(String id) => _nodes.containsKey(id);
+  String normalizeNodeId(String id) => redirects[id] ?? id;
 
   /// Position (normalised) and map of any node (place or junction).
   Offset? positionOf(String id) => _nodes[id]?.pos;
@@ -267,12 +299,16 @@ class MuseumGraph {
 
   int _floorOf(String nodeId) => placeFloors[nodeId] ?? maps[_nodes[nodeId]!.mapId]!.level;
 
-  _Edge? _edge(String a, String b) {
-    _Edge? best;
-    for (final e in _adj[a] ?? const <_Edge>[]) {
-      if (e.to == b && (best == null || e.cost < best.cost)) best = e;
+  double _edgeCost(_Edge e, RouteObjective objective) => switch (objective) {
+    RouteObjective.shortestDistance => e.meters,
+    RouteObjective.fastestTime => e.seconds,
+  };
+
+  _Edge? _edgeById(String from, String edgeId) {
+    for (final e in _adj[from] ?? const <_Edge>[]) {
+      if (e.id == edgeId) return e;
     }
-    return best;
+    return null;
   }
 
   String? _nearPlace(String mapId, Offset pos, double maxUnits) {
@@ -290,13 +326,14 @@ class MuseumGraph {
     return best;
   }
 
-  ({Map<String, double> dist, Map<String, String> prev}) _dijkstra(
+  ({Map<String, double> dist, Map<String, (String, String)> prevEdge}) _dijkstra(
     String from, {
     required bool avoidStairs,
+    required RouteObjective objective,
     String? stopAt,
   }) {
     final dist = <String, double>{for (final k in _nodes.keys) k: double.infinity};
-    final prev = <String, String>{};
+    final prevEdge = <String, (String, String)>{};
     final open = _nodes.keys.toSet();
     dist[from] = 0;
     while (open.isNotEmpty) {
@@ -314,43 +351,60 @@ class MuseumGraph {
       for (final e in _adj[u] ?? const <_Edge>[]) {
         if (avoidStairs && e.stairs) continue;
         if (!open.contains(e.to)) continue;
-        final alt = best + e.cost;
+        final alt = best + _edgeCost(e, objective);
         if (alt < dist[e.to]!) {
           dist[e.to] = alt;
-          prev[e.to] = u;
+          prevEdge[e.to] = (u, e.id);
         }
       }
     }
-    return (dist: dist, prev: prev);
+    return (dist: dist, prevEdge: prevEdge);
   }
 
   // ── single route ───────────────────────────────────────────────
-  RouteResult? find(String from, String to, {bool avoidStairs = false}) {
-    to = redirects[to] ?? to;
-    if (from == to || !_nodes.containsKey(from) || !_nodes.containsKey(to)) return null;
-    final r = _dijkstra(from, avoidStairs: avoidStairs, stopAt: to);
+  RouteResult? find(
+    String from,
+    String to, {
+    bool avoidStairs = false,
+    RouteObjective objective = RouteObjective.shortestDistance,
+  }) {
+    from = normalizeNodeId(from);
+    to = normalizeNodeId(to);
+    if (!_nodes.containsKey(from) || !_nodes.containsKey(to)) return null;
+    if (from == to) return _assemble(from, const <_Edge>[]);
+    final r = _dijkstra(
+      from,
+      avoidStairs: avoidStairs,
+      objective: objective,
+      stopAt: to,
+    );
     if (r.dist[to]!.isInfinite) return null;
-    final ids = <String>[to];
+    final rev = <_Edge>[];
     var cur = to;
     while (cur != from) {
-      cur = r.prev[cur]!;
-      ids.add(cur);
+      final p = r.prevEdge[cur];
+      if (p == null) return null;
+      final edge = _edgeById(p.$1, p.$2);
+      if (edge == null) return null;
+      rev.add(edge);
+      cur = p.$1;
     }
-    return _assemble(ids.reversed.toList());
+    return _assemble(from, rev.reversed.toList());
   }
 
-  RouteResult _assemble(List<String> ids) {
+  RouteResult _assemble(String start, List<_Edge> edges) {
     final legs = <RouteLeg>[];
     final raw = <(RouteStep, double)>[]; // step + cumulative metres where it happens
     var meters = 0.0, seconds = 0.0;
     var usesStairs = false;
 
-    var curMap = _nodes[ids.first]!.mapId;
-    var legIds = <String>[ids.first];
-    var legPts = <Offset>[_nodes[ids.first]!.pos];
+    var curNode = start;
+    var curMap = _nodes[start]!.mapId;
+    var legIds = <String>[start];
+    var legPts = <Offset>[_nodes[start]!.pos];
 
     raw.add((
-      RouteStep(StepKind.start, mapId: curMap, position: _nodes[ids.first]!.pos, targetId: _places.containsKey(ids.first) ? ids.first : null),
+      RouteStep(StepKind.start, mapId: curMap, position: _nodes[start]!.pos, targetId: _places.containsKey(start) ? start : null),
       0,
     ));
 
@@ -358,12 +412,13 @@ class MuseumGraph {
       legs.add(RouteLeg(curMap, List.of(legPts), List.of(legIds), nextMapId: next, portal: portal));
     }
 
-    for (var i = 1; i < ids.length; i++) {
-      final a = ids[i - 1], b = ids[i];
-      final e = _edge(a, b)!;
+    for (var i = 0; i < edges.length; i++) {
+      final a = curNode;
+      final e = edges[i];
+      final b = e.to;
       final na = _nodes[a]!, nb = _nodes[b]!;
       meters += e.meters;
-      seconds += e.meters / walkSpeed;
+      seconds += e.seconds;
       if (e.stairs) usesStairs = true;
 
       if (e.portal != null) {
@@ -375,7 +430,6 @@ class MuseumGraph {
           PortalKind.stairs => RouteStep(StepKind.stairs, mapId: na.mapId, position: na.pos, floor: _floorOf(b), down: goesDown),
           PortalKind.lift => RouteStep(StepKind.lift, mapId: na.mapId, position: na.pos, floor: _floorOf(b), down: goesDown),
         };
-        if (kind == PortalKind.lift) seconds += _liftWaitSeconds;
         raw.add((step, meters - e.meters));
         if (na.mapId != nb.mapId) {
           closeLeg(next: nb.mapId, portal: e.portal);
@@ -394,12 +448,12 @@ class MuseumGraph {
         ..addAll(e.via)
         ..add(nb.pos);
       // Turn detection at b (needs a walkable edge after it).
-      if (i + 1 < ids.length) {
-        final next = _edge(b, ids[i + 1]);
-        if (next != null && next.portal == null) {
+      if (i + 1 < edges.length) {
+        final next = edges[i + 1];
+        if (next.portal == null) {
           final m = maps[nb.mapId]!;
           final pIn = e.via.isNotEmpty ? e.via.last : na.pos;
-          final nc = _nodes[ids[i + 1]]!;
+          final nc = _nodes[next.to]!;
           final pOut = next.via.isNotEmpty ? next.via.first : nc.pos;
           final va = Offset((nb.pos.dx - pIn.dx) * m.imageSize.width, (nb.pos.dy - pIn.dy) * m.imageSize.height);
           final vb = Offset((pOut.dx - nb.pos.dx) * m.imageSize.width, (pOut.dy - nb.pos.dy) * m.imageSize.height);
@@ -421,10 +475,11 @@ class MuseumGraph {
           }
         }
       }
+      curNode = b;
     }
     closeLeg();
 
-    final last = ids.last;
+    final last = curNode;
     raw.add((
       RouteStep(StepKind.arrive, mapId: _nodes[last]!.mapId, position: _nodes[last]!.pos, targetId: _places.containsKey(last) ? last : null),
       meters,
@@ -441,15 +496,39 @@ class MuseumGraph {
   /// Orders [stops] (nearest-neighbour + 2-opt on real walking distances)
   /// and joins them into one route starting at [start].
   TourResult? tour(String start, List<String> stops, {bool avoidStairs = false, bool optimize = true}) {
+    return tourWithObjective(
+      start,
+      stops,
+      avoidStairs: avoidStairs,
+      optimize: optimize,
+      objective: RouteObjective.shortestDistance,
+    );
+  }
+
+  TourResult? tourWithObjective(
+    String start,
+    List<String> stops, {
+    bool avoidStairs = false,
+    bool optimize = true,
+    RouteObjective objective = RouteObjective.shortestDistance,
+  }) {
+    start = normalizeNodeId(start);
     final ids = <String>[];
     for (final s in stops) {
-      final id = redirects[s] ?? s;
+      final id = normalizeNodeId(s);
       if (id != start && !ids.contains(id) && _nodes.containsKey(id)) ids.add(id);
     }
     if (ids.isEmpty || !_nodes.containsKey(start)) return null;
 
     final all = [start, ...ids];
-    final d = <String, Map<String, double>>{for (final a in all) a: _dijkstra(a, avoidStairs: avoidStairs).dist};
+    final d = <String, Map<String, double>>{
+      for (final a in all)
+        a: _dijkstra(
+          a,
+          avoidStairs: avoidStairs,
+          objective: objective,
+        ).dist,
+    };
     final reachable = [for (final s in ids) if (d[start]![s]!.isFinite) s];
     final skipped = [for (final s in ids) if (!d[start]![s]!.isFinite) s];
     if (reachable.isEmpty) return null;
@@ -499,7 +578,12 @@ class MuseumGraph {
     var stairs = false;
     var from = start;
     for (var i = 0; i < order.length; i++) {
-      final r = find(from, order[i], avoidStairs: avoidStairs);
+      final r = find(
+        from,
+        order[i],
+        avoidStairs: avoidStairs,
+        objective: objective,
+      );
       if (r == null) continue;
       legs.addAll(r.legs);
       for (final s in r.steps) {
