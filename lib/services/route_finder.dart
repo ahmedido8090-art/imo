@@ -1,107 +1,53 @@
 import 'dart:math' as math;
-
 import 'package:flutter/material.dart';
-
 import '../data/gem_extras.dart';
 import '../data/gem_paths.dart';
 import '../models/map_models.dart';
-
-// ═══════════════════════════════════════════════════════════════
-//  Results
-// ═══════════════════════════════════════════════════════════════
 
 enum StepKind { start, left, right, enterBuilding, exitBuilding, stairs, lift, arrive, stop }
 enum RouteObjective { shortestDistance, fastestTime }
 
 @immutable
 class RouteStep {
-  const RouteStep(
-    this.kind, {
-    required this.mapId,
-    this.position,
-    this.targetId,
-    this.refMapId,
-    this.floor = 0,
-    this.down = false,
-    this.index = 0,
-    this.meters = 0,
-  });
-
+  const RouteStep(this.kind, {required this.mapId, this.position, this.targetId,
+    this.refMapId, this.floor = 0, this.down = false, this.index = 0, this.meters = 0});
   final StepKind kind;
   final String mapId;
   final Offset? position;
-
-  /// Place named in the instruction ("turn left near …", "arrive at …").
-  final String? targetId;
-
-  /// Map being entered (for [StepKind.enterBuilding]).
-  final String? refMapId;
-  final int floor;
-
-  /// Stairs / lift go DOWN to [floor] (otherwise up).
+  final String? targetId, refMapId;
+  final int floor, index;
   final bool down;
-
-  /// Stop number in a tour.
-  final int index;
-
-  /// Walking distance until the next instruction.
   final double meters;
-
-  RouteStep withMeters(double m) => RouteStep(
-    kind,
-    mapId: mapId,
-    position: position,
-    targetId: targetId,
-    refMapId: refMapId,
-    floor: floor,
-    down: down,
-    index: index,
-    meters: m,
-  );
-
+  RouteStep withMeters(double m) => RouteStep(kind, mapId: mapId,
+    position: position, targetId: targetId, refMapId: refMapId, floor: floor,
+    down: down, index: index, meters: m);
   IconData get icon => switch (kind) {
-    StepKind.start => Icons.trip_origin,
-    StepKind.left => Icons.turn_left,
-    StepKind.right => Icons.turn_right,
-    StepKind.enterBuilding => Icons.login,
-    StepKind.exitBuilding => Icons.logout,
-    StepKind.stairs => Icons.stairs,
-    StepKind.lift => Icons.elevator,
-    StepKind.arrive => Icons.flag,
+    StepKind.start => Icons.trip_origin, StepKind.left => Icons.turn_left,
+    StepKind.right => Icons.turn_right, StepKind.enterBuilding => Icons.login,
+    StepKind.exitBuilding => Icons.logout, StepKind.stairs => Icons.stairs,
+    StepKind.lift => Icons.elevator, StepKind.arrive => Icons.flag,
     StepKind.stop => Icons.place,
   };
 }
 
-/// The part of a route that lies on one map.
 @immutable
 class RouteLeg {
   const RouteLeg(this.mapId, this.points, this.nodeIds, {this.nextMapId, this.portal});
   final String mapId;
-
-  /// Normalised points on [mapId].
   final List<Offset> points;
   final List<String> nodeIds;
-
-  /// Set when the route leaves this map here (through a door, stairs or lift).
   final String? nextMapId;
   final Portal? portal;
 }
 
 @immutable
 class RouteResult {
-  const RouteResult({
-    required this.legs,
-    required this.steps,
-    required this.meters,
-    required this.seconds,
-    required this.usesStairs,
-  });
+  const RouteResult({required this.legs, required this.steps, required this.meters,
+    required this.seconds, required this.usesStairs});
   final List<RouteLeg> legs;
   final List<RouteStep> steps;
-  final double meters;
-  final double seconds;
+  final double meters, seconds;
   final bool usesStairs;
-
   Duration get walkTime => Duration(seconds: seconds.round());
   List<RouteLeg> legsOn(String mapId) => [for (final l in legs) if (l.mapId == mapId) l];
 }
@@ -109,500 +55,341 @@ class RouteResult {
 @immutable
 class TourResult {
   const TourResult({required this.order, required this.route, required this.skipped});
-
-  /// Stop ids in visiting order.
-  final List<String> order;
+  final List<String> order, skipped;
   final RouteResult route;
-
-  /// Stops that cannot be reached with the current options.
-  final List<String> skipped;
 }
 
-// ═══════════════════════════════════════════════════════════════
-//  The graph: every map, plus the portals that join them
-// ═══════════════════════════════════════════════════════════════
-
 class _Node {
-  _Node(this.id, this.mapId, this.pos);
-  final String id;
-  final String mapId;
+  const _Node(this.id, this.mapId, this.pos);
+  final String id, mapId;
   final Offset pos;
 }
 
 class _Edge {
-  _Edge(
-    this.to,
-    this.meters,
-    this.seconds, {
-    required this.id,
-    this.stairs = false,
-    this.portal,
-    this.via = const [],
-  });
-  final String id;
-  final String to;
-
-  /// Bend points between the two nodes (wall-aware path), normalised.
-  final List<Offset> via;
-  final double meters; // real length, used for distance/time
-  final double seconds;
+  const _Edge(this.to, this.meters, this.seconds, {required this.id,
+    this.stairs = false, this.portal});
+  final String id, to;
+  final double meters, seconds;
   final bool stairs;
   final Portal? portal;
 }
 
+/// Pedestrian routing over existing traced walkways. Shared trace vertices
+/// become junctions; no unverified straight-line shortcuts are manufactured.
 class MuseumGraph {
-  MuseumGraph(
-    this.maps, {
-    this.portals = const [],
-    this.stairEdges = const {},
-    this.redirects = const {},
-    this.placeFloors = const {},
-  }) {
-    _build();
-  }
-
+  MuseumGraph(this.maps, {this.portals = const [], this.stairEdges = const {},
+    this.redirects = const {}, this.placeFloors = const {},
+    Map<String, List<Offset>>? edgePaths, Map<String, String>? pinLinks})
+    : _paths = edgePaths ?? kEdgePaths, _pins = pinLinks ?? kPinLinks { _build(); }
   final Map<String, GemMap> maps;
   final List<Portal> portals;
   final Set<String> stairEdges;
   final Map<String, String> redirects;
   final Map<String, int> placeFloors;
-
-  /// Average walking speed, m/s.
+  final Map<String, List<Offset>> _paths;
+  final Map<String, String> _pins;
   static const double walkSpeed = 1.25;
-  static const double _liftWaitSeconds = 40;
-
   final Map<String, _Node> _nodes = {};
   final Map<String, List<_Edge>> _adj = {};
   final Map<String, MapPlace> _places = {};
-  int _edgeSeq = 0;
+  final Map<(String, double, double), String> _vertices = {};
+  int _sequence = 0;
 
-  // ── build ──────────────────────────────────────────────────────
-  /// A place drawn on this map but located on another floor (e.g. the
-  /// Sakkara Cannon on the ground plan, really on floor 1). It must not be
-  /// reachable step-free, so it joins the graph through a stairs edge and
-  /// step-free visitors have to use the lift portals instead.
-  bool _offFloor(MapPlace p, GemMap m) {
-    final f = placeFloors[p.id];
-    return f != null && f != m.level && !redirects.containsKey(p.id);
-  }
+  double _distance(GemMap m, Offset a, Offset b) => Offset(
+    (a.dx-b.dx)*m.imageSize.width, (a.dy-b.dy)*m.imageSize.height).distance;
+  int _floor(String id) => placeFloors[id] ?? maps[_nodes[id]!.mapId]!.level;
+  bool _offFloor(MapPlace p, GemMap m) => placeFloors[p.id] != null &&
+    placeFloors[p.id] != m.level && !redirects.containsKey(p.id);
 
   void _build() {
     for (final m in maps.values) {
       for (final p in m.places) {
-        _nodes[p.id] = _Node(p.id, m.id, p.position);
-        _places[p.id] = p;
+        _nodes[p.id] = _Node(p.id, m.id, p.position); _places[p.id] = p;
       }
-      m.junctions.forEach((id, pos) => _nodes[id] = _Node(id, m.id, pos));
+      m.junctions.forEach((id, pos) { _nodes[id] = _Node(id, m.id, pos); });
     }
     for (final m in maps.values) {
       for (final e in m.edges) {
-        _link(e.$1, e.$2, stairs: stairEdges.contains('${e.$1}|${e.$2}') || stairEdges.contains('${e.$2}|${e.$1}'));
+        _link(e.$1, e.$2, stairs: stairEdges.contains('${e.$1}|${e.$2}') ||
+          stairEdges.contains('${e.$2}|${e.$1}'));
       }
       for (final p in m.places.where((p) => p.autoConnect)) {
-        final off = _offFloor(p, m);
-        final linked = kPinLinks[p.id];
+        final linked = _pins[p.id];
         if (linked != null && m.junctions.containsKey(linked)) {
-          _link(p.id, linked, stairs: off);
-          continue;
+          _link(p.id, linked, stairs: _offFloor(p, m));
         }
-        String? best;
-        var bd = double.infinity;
-        for (final j in m.junctions.entries) {
-          final d = _unitDist(m, p.position, j.value);
-          if (d < bd) {
-            bd = d;
-            best = j.key;
-          }
-        }
-        if (best != null) _link(p.id, best, stairs: off);
+        // Unknown entrances remain disconnected rather than crossing walls
+        // through an unchecked nearest-junction fallback.
       }
     }
-    for (final pt in portals) {
-      _link(pt.a, pt.b, meters: pt.meters, portal: pt, stairs: pt.kind == PortalKind.stairs);
+    for (final p in portals) {
+      _link(p.a, p.b, meters: p.meters, portal: p,
+        stairs: p.kind == PortalKind.stairs);
     }
   }
 
-  double _unitDist(GemMap m, Offset a, Offset b) {
-    final dx = (a.dx - b.dx) * m.imageSize.width;
-    final dy = (a.dy - b.dy) * m.imageSize.height;
-    return math.sqrt(dx * dx + dy * dy);
+  void _connect(String a, String b, double meters, {bool stairs = false, Portal? portal}) {
+    if (a == b) return;
+    final id = 'edge_${_sequence++}';
+    final seconds = meters / walkSpeed + (portal?.kind == PortalKind.lift ? 40 : 0);
+    _adj.putIfAbsent(a, () => []).add(_Edge(b, meters, seconds,
+      id: id, stairs: stairs, portal: portal));
+    _adj.putIfAbsent(b, () => []).add(_Edge(a, meters, seconds,
+      id: id, stairs: stairs, portal: portal));
   }
 
-  double _polyLength(GemMap m, List<Offset> pts) {
-    var d = 0.0;
-    for (var i = 1; i < pts.length; i++) {
-      d += _unitDist(m, pts[i - 1], pts[i]);
-    }
-    return d;
+  String _vertex(String mapId, Offset p) {
+    // Exact coordinates only: do not merge nearby but separated walkways.
+    return _vertices.putIfAbsent((mapId, p.dx, p.dy), () {
+      final id = 'walk_${_sequence++}';
+      _nodes[id] = _Node(id, mapId, p); return id;
+    });
   }
 
   void _link(String a, String b, {double? meters, bool stairs = false, Portal? portal}) {
     final na = _nodes[a], nb = _nodes[b];
     if (na == null || nb == null) return;
-    final m = maps[na.mapId]!;
-    var via = const <Offset>[];
-    if (portal == null && na.mapId == nb.mapId) {
-      final fwd = a.compareTo(b) < 0;
-      final stored = kEdgePaths[fwd ? '$a|$b' : '$b|$a'];
-      if (stored != null) via = fwd ? stored : stored.reversed.toList();
+    if (portal != null) {
+      _connect(a, b, meters ?? portal.meters, stairs: stairs, portal: portal); return;
     }
-    final len = meters ?? _polyLength(m, [na.pos, ...via, nb.pos]) * m.metersPerPixel;
-    final secs = len / walkSpeed + ((portal?.kind == PortalKind.lift) ? _liftWaitSeconds : 0);
-    final edgeId = 'e${_edgeSeq++}';
-    _adj.putIfAbsent(a, () => []).add(
-      _Edge(
-        b,
-        len,
-        secs,
-        id: edgeId,
-        stairs: stairs,
-        portal: portal,
-        via: via,
-      ),
-    );
-    _adj.putIfAbsent(b, () => []).add(
-      _Edge(
-        a,
-        len,
-        secs,
-        id: edgeId,
-        stairs: stairs,
-        portal: portal,
-        via: via.reversed.toList(),
-      ),
-    );
+    if (na.mapId != nb.mapId) return;
+    final m = maps[na.mapId]!;
+    final forward = a.compareTo(b) < 0;
+    final stored = _paths[forward ? '$a|$b' : '$b|$a'] ?? const <Offset>[];
+    final pts = <Offset>[na.pos, ...(forward ? stored : stored.reversed), nb.pos];
+    var at = a;
+    for (var i = 0; i < pts.length; i++) {
+      // Stair/off-floor traces must not join ordinary floor-level paths.
+      final id = stairs ? (i == 0 ? a : i == pts.length-1 ? b : 'stair_${_sequence++}')
+        : _vertex(na.mapId, pts[i]);
+      _nodes.putIfAbsent(id, () => _Node(id, na.mapId, pts[i]));
+      _connect(at, id, i == 0 ? 0 : _distance(m, pts[i-1], pts[i])*m.metersPerPixel,
+        stairs: stairs);
+      at = id;
+    }
+    _connect(at, b, 0, stairs: stairs);
   }
 
-  // ── helpers ────────────────────────────────────────────────────
   bool has(String id) => _nodes.containsKey(id);
-  String normalizeNodeId(String id) => redirects[id] ?? id;
-
-  /// Position (normalised) and map of any node (place or junction).
+  String normalizeNodeId(String id) {
+    final seen = <String>{};
+    while (redirects.containsKey(id) && seen.add(id)) { id = redirects[id]!; }
+    return id;
+  }
   Offset? positionOf(String id) => _nodes[id]?.pos;
   String? mapOf(String id) => _nodes[id]?.mapId;
 
-  /// Closest routable node (place or junction) to a point on a map.
+  /// Compatibility API: returns a routable projected node, not an endpoint.
+  /// Splitting preserves both directions and also supports two taps on one edge.
   String? nearestNodeId(String mapId, Offset pos) {
-    final m = maps[mapId];
-    if (m == null) return null;
-    String? best;
-    var bd = double.infinity;
-    for (final n in _nodes.values.where((n) => n.mapId == mapId)) {
-      final d = _unitDist(m, n.pos, pos);
-      if (d < bd) {
-        bd = d;
-        best = n.id;
-      }
-    }
-    return best;
-  }
-
-  int _floorOf(String nodeId) => placeFloors[nodeId] ?? maps[_nodes[nodeId]!.mapId]!.level;
-
-  double _edgeCost(_Edge e, RouteObjective objective) => switch (objective) {
-    RouteObjective.shortestDistance => e.meters,
-    RouteObjective.fastestTime => e.seconds,
-  };
-
-  _Edge? _edgeById(String from, String edgeId) {
-    for (final e in _adj[from] ?? const <_Edge>[]) {
-      if (e.id == edgeId) return e;
-    }
-    return null;
-  }
-
-  String? _nearPlace(String mapId, Offset pos, double maxUnits) {
-    final m = maps[mapId]!;
-    String? best;
-    var bd = maxUnits;
-    for (final p in m.places) {
-      if (p.category == PlaceCategory.facility || p.category == PlaceCategory.parking) continue;
-      final d = _unitDist(m, p.position, pos);
-      if (d < bd) {
-        bd = d;
-        best = p.id;
-      }
-    }
-    return best;
-  }
-
-  ({Map<String, double> dist, Map<String, (String, String)> prevEdge}) _dijkstra(
-    String from, {
-    required bool avoidStairs,
-    required RouteObjective objective,
-    String? stopAt,
-  }) {
-    final dist = <String, double>{for (final k in _nodes.keys) k: double.infinity};
-    final prevEdge = <String, (String, String)>{};
-    final open = _nodes.keys.toSet();
-    dist[from] = 0;
-    while (open.isNotEmpty) {
-      String? u;
-      var best = double.infinity;
-      for (final k in open) {
-        final d = dist[k]!;
+    final m = maps[mapId]; if (m == null) return null;
+    String? from;
+    _Edge? selected;
+    Offset? projection;
+    var best = double.infinity;
+    var fraction = 0.0;
+    for (final entry in _adj.entries) {
+      final a = _nodes[entry.key]!;
+      if (a.mapId != mapId) continue;
+      for (final e in entry.value) {
+        final b = _nodes[e.to]!;
+        if (e.portal != null || e.stairs || b.mapId != mapId ||
+            _floor(a.id) != m.level || _floor(b.id) != m.level) continue;
+        final v = Offset((b.pos.dx-a.pos.dx)*m.imageSize.width,
+          (b.pos.dy-a.pos.dy)*m.imageSize.height);
+        if (v.distanceSquared < 1e-16) continue;
+        final w = Offset((pos.dx-a.pos.dx)*m.imageSize.width,
+          (pos.dy-a.pos.dy)*m.imageSize.height);
+        final t = ((w.dx*v.dx+w.dy*v.dy)/v.distanceSquared).clamp(0.0, 1.0).toDouble();
+        final p = a.pos+(b.pos-a.pos)*t;
+        final d = _distance(m, pos, p);
         if (d < best) {
-          best = d;
-          u = k;
-        }
-      }
-      if (u == null || u == stopAt) break;
-      open.remove(u);
-      for (final e in _adj[u] ?? const <_Edge>[]) {
-        if (avoidStairs && e.stairs) continue;
-        if (!open.contains(e.to)) continue;
-        final alt = best + _edgeCost(e, objective);
-        if (alt < dist[e.to]!) {
-          dist[e.to] = alt;
-          prevEdge[e.to] = (u, e.id);
+          best = d; from = a.id; selected = e; projection = p; fraction = t;
         }
       }
     }
-    return (dist: dist, prevEdge: prevEdge);
+    if (from == null || selected == null || projection == null) return null;
+    if (fraction <= 1e-9) return from;
+    if (fraction >= 1-1e-9) return selected.to;
+    final id = 'snap_${_sequence++}';
+    _nodes[id] = _Node(id, mapId, projection);
+    _adj[from]!.removeWhere((e) => e.id == selected!.id);
+    _adj[selected.to]!.removeWhere((e) => e.id == selected!.id);
+    _connect(from, id, selected.meters*fraction);
+    _connect(id, selected.to, selected.meters*(1-fraction));
+    return id;
   }
 
-  // ── single route ───────────────────────────────────────────────
-  RouteResult? find(
-    String from,
-    String to, {
-    bool avoidStairs = false,
-    RouteObjective objective = RouteObjective.shortestDistance,
-  }) {
-    from = normalizeNodeId(from);
-    to = normalizeNodeId(to);
-    if (!_nodes.containsKey(from) || !_nodes.containsKey(to)) return null;
-    if (from == to) return _assemble(from, const <_Edge>[]);
-    final r = _dijkstra(
-      from,
-      avoidStairs: avoidStairs,
-      objective: objective,
-      stopAt: to,
-    );
-    if (r.dist[to]!.isInfinite) return null;
-    final rev = <_Edge>[];
-    var cur = to;
-    while (cur != from) {
-      final p = r.prevEdge[cur];
-      if (p == null) return null;
-      final edge = _edgeById(p.$1, p.$2);
-      if (edge == null) return null;
-      rev.add(edge);
-      cur = p.$1;
+  ({Map<String, double> dist, Map<String, (String, _Edge)> prev}) _search(
+    String start, bool avoidStairs, RouteObjective objective, {String? stopAt}) {
+    final dist = <String, double>{start: 0};
+    final prev = <String, (String, _Edge)>{};
+    final open = <String>{start}, closed = <String>{};
+    while (open.isNotEmpty) {
+      final at = open.reduce((a, b) => dist[a]! <= dist[b]! ? a : b);
+      open.remove(at);
+      if (at == stopAt) break;
+      closed.add(at);
+      for (final e in _adj[at] ?? const <_Edge>[]) {
+        if (closed.contains(e.to) || (avoidStairs && e.stairs)) continue;
+        final cost = dist[at]! + (objective == RouteObjective.shortestDistance ? e.meters : e.seconds);
+        if (cost < (dist[e.to] ?? double.infinity)) {
+          dist[e.to] = cost; prev[e.to] = (at, e); open.add(e.to);
+        }
+      }
     }
-    return _assemble(from, rev.reversed.toList());
+    return (dist: dist, prev: prev);
+  }
+
+  RouteResult? find(String from, String to, {bool avoidStairs = false,
+    RouteObjective objective = RouteObjective.shortestDistance}) {
+    from = normalizeNodeId(from); to = normalizeNodeId(to);
+    if (!has(from) || !has(to)) return null;
+    final r = _search(from, avoidStairs, objective, stopAt: to);
+    if (!r.dist.containsKey(to)) return null;
+    final reversed = <_Edge>[];
+    var at = to;
+    while (at != from) {
+      final p = r.prev[at]; if (p == null) return null;
+      reversed.add(p.$2); at = p.$1;
+    }
+    return _assemble(from, reversed.reversed.toList());
   }
 
   RouteResult _assemble(String start, List<_Edge> edges) {
     final legs = <RouteLeg>[];
-    final raw = <(RouteStep, double)>[]; // step + cumulative metres where it happens
+    final raw = <(RouteStep, double)>[];
+    var at = start, mapId = _nodes[start]!.mapId;
+    var ids = <String>[start], points = <Offset>[_nodes[start]!.pos];
     var meters = 0.0, seconds = 0.0;
-    var usesStairs = false;
-
-    var curNode = start;
-    var curMap = _nodes[start]!.mapId;
-    var legIds = <String>[start];
-    var legPts = <Offset>[_nodes[start]!.pos];
-
-    raw.add((
-      RouteStep(StepKind.start, mapId: curMap, position: _nodes[start]!.pos, targetId: _places.containsKey(start) ? start : null),
-      0,
-    ));
-
-    void closeLeg({String? next, Portal? portal}) {
-      legs.add(RouteLeg(curMap, List.of(legPts), List.of(legIds), nextMapId: next, portal: portal));
+    var stairs = false;
+    raw.add((RouteStep(StepKind.start, mapId: mapId, position: points.first,
+      targetId: _places.containsKey(start) ? start : null), 0));
+    void close({String? next, Portal? portal}) {
+      legs.add(RouteLeg(mapId, List.of(points), List.of(ids), nextMapId: next, portal: portal));
     }
-
-    for (var i = 0; i < edges.length; i++) {
-      final a = curNode;
-      final e = edges[i];
-      final b = e.to;
-      final na = _nodes[a]!, nb = _nodes[b]!;
-      meters += e.meters;
-      seconds += e.seconds;
-      if (e.stairs) usesStairs = true;
-
+    for (final e in edges) {
+      final a = _nodes[at]!, b = _nodes[e.to]!;
       if (e.portal != null) {
-        final kind = e.portal!.kind;
-        final goesDown = _floorOf(b) < _floorOf(a);
-        final leaving = kOutdoorMaps.contains(nb.mapId) && !kOutdoorMaps.contains(na.mapId) || kSubMapParent[na.mapId] == nb.mapId;
-        final step = switch (kind) {
-          PortalKind.door => RouteStep(leaving ? StepKind.exitBuilding : StepKind.enterBuilding, mapId: na.mapId, position: na.pos, refMapId: leaving ? na.mapId : nb.mapId),
-          PortalKind.stairs => RouteStep(StepKind.stairs, mapId: na.mapId, position: na.pos, floor: _floorOf(b), down: goesDown),
-          PortalKind.lift => RouteStep(StepKind.lift, mapId: na.mapId, position: na.pos, floor: _floorOf(b), down: goesDown),
+        final p = e.portal!;
+        final leaving = (kOutdoorMaps.contains(b.mapId) && !kOutdoorMaps.contains(a.mapId)) ||
+          kSubMapParent[a.mapId] == b.mapId;
+        final kind = switch (p.kind) {
+          PortalKind.door => leaving ? StepKind.exitBuilding : StepKind.enterBuilding,
+          PortalKind.stairs => StepKind.stairs, PortalKind.lift => StepKind.lift,
         };
-        raw.add((step, meters - e.meters));
-        if (na.mapId != nb.mapId) {
-          closeLeg(next: nb.mapId, portal: e.portal);
-          curMap = nb.mapId;
-          legIds = <String>[b];
-          legPts = <Offset>[nb.pos];
-        } else {
-          legIds.add(b);
-          legPts.add(nb.pos);
+        raw.add((RouteStep(kind, mapId: a.mapId, position: a.pos,
+          refMapId: leaving ? a.mapId : b.mapId, floor: _floor(b.id),
+          down: _floor(b.id) < _floor(a.id)), meters));
+        if (a.mapId != b.mapId) {
+          close(next: b.mapId, portal: p);
+          mapId = b.mapId; ids = <String>[]; points = <Offset>[];
         }
-        continue;
       }
-
-      legIds.add(b);
-      legPts
-        ..addAll(e.via)
-        ..add(nb.pos);
-      // Turn detection at b (needs a walkable edge after it).
-      if (i + 1 < edges.length) {
-        final next = edges[i + 1];
-        if (next.portal == null) {
-          final m = maps[nb.mapId]!;
-          final pIn = e.via.isNotEmpty ? e.via.last : na.pos;
-          final nc = _nodes[next.to]!;
-          final pOut = next.via.isNotEmpty ? next.via.first : nc.pos;
-          final va = Offset((nb.pos.dx - pIn.dx) * m.imageSize.width, (nb.pos.dy - pIn.dy) * m.imageSize.height);
-          final vb = Offset((pOut.dx - nb.pos.dx) * m.imageSize.width, (pOut.dy - nb.pos.dy) * m.imageSize.height);
-          if (va.distance > 10 && vb.distance > 10) {
-            final cross = va.dx * vb.dy - va.dy * vb.dx; // y points down → positive = turning right
-            final dot = va.dx * vb.dx + va.dy * vb.dy;
-            final angle = math.atan2(cross, dot);
-            if (angle.abs() > 0.6) {
-              raw.add((
-                RouteStep(
-                  angle > 0 ? StepKind.right : StepKind.left,
-                  mapId: nb.mapId,
-                  position: nb.pos,
-                  targetId: _nearPlace(nb.mapId, nb.pos, 80 * 1.0),
-                ),
-                meters,
-              ));
-            }
+      ids.add(b.id);
+      if (points.isEmpty || points.last != b.pos) points.add(b.pos);
+      meters += e.meters; seconds += e.seconds; stairs = stairs || e.stairs;
+      at = b.id; // Also advance after portals.
+    }
+    close();
+    // Instructions follow the actual polyline, including bends within old edges.
+    // Small raster steps do not generate a turn at every pixel.
+    var base = 0.0;
+    for (final leg in legs) {
+      final m = maps[leg.mapId]!;
+      var anchor = 0, previousTurn = 0;
+      for (var i = 1; i+1 < leg.points.length; i++) {
+        if (_distance(m, leg.points[anchor], leg.points[i]) < 10) continue;
+        var j = i+1;
+        while (j+1 < leg.points.length && _distance(m, leg.points[i], leg.points[j]) < 10) { j++; }
+        final a = leg.points[i]-leg.points[anchor], b = leg.points[j]-leg.points[i];
+        final va = Offset(a.dx*m.imageSize.width, a.dy*m.imageSize.height);
+        final vb = Offset(b.dx*m.imageSize.width, b.dy*m.imageSize.height);
+        final angle = math.atan2(va.dx*vb.dy-va.dy*vb.dx, va.dx*vb.dx+va.dy*vb.dy);
+        if (angle.abs() > 0.6 && vb.distance >= 10) {
+          var distance = base;
+          for (var k = 1; k <= i; k++) {
+            distance += _distance(m, leg.points[k-1], leg.points[k])*m.metersPerPixel;
           }
-        }
+          raw.add((RouteStep(angle > 0 ? StepKind.right : StepKind.left,
+            mapId: leg.mapId, position: leg.points[i]), distance));
+          previousTurn = i; anchor = i;
+        } else if (i-previousTurn > 1) { anchor = i-1; }
       }
-      curNode = b;
+      for (var i = 1; i < leg.points.length; i++) {
+        base += _distance(m, leg.points[i-1], leg.points[i])*m.metersPerPixel;
+      }
+      if (leg.portal != null) base += leg.portal!.meters;
     }
-    closeLeg();
-
-    final last = curNode;
-    raw.add((
-      RouteStep(StepKind.arrive, mapId: _nodes[last]!.mapId, position: _nodes[last]!.pos, targetId: _places.containsKey(last) ? last : null),
-      meters,
-    ));
-
-    final steps = <RouteStep>[
-      for (var i = 0; i < raw.length; i++)
-        raw[i].$1.withMeters(i + 1 < raw.length ? raw[i + 1].$2 - raw[i].$2 : 0),
-    ];
-    return RouteResult(legs: legs, steps: steps, meters: meters, seconds: seconds, usesStairs: usesStairs);
+    raw.add((RouteStep(StepKind.arrive, mapId: _nodes[at]!.mapId,
+      position: _nodes[at]!.pos, targetId: _places.containsKey(at) ? at : null), meters));
+    raw.sort((a, b) => a.$2.compareTo(b.$2));
+    final steps = <RouteStep>[for (var i = 0; i < raw.length; i++)
+      raw[i].$1.withMeters(i+1 < raw.length ? math.max(0.0, raw[i+1].$2-raw[i].$2) : 0)];
+    return RouteResult(legs: legs, steps: steps, meters: meters,
+      seconds: seconds, usesStairs: stairs);
   }
 
-  // ── tours ──────────────────────────────────────────────────────
-  /// Orders [stops] (nearest-neighbour + 2-opt on real walking distances)
-  /// and joins them into one route starting at [start].
-  TourResult? tour(String start, List<String> stops, {bool avoidStairs = false, bool optimize = true}) {
-    return tourWithObjective(
-      start,
-      stops,
-      avoidStairs: avoidStairs,
-      optimize: optimize,
-      objective: RouteObjective.shortestDistance,
-    );
-  }
+  TourResult? tour(String start, List<String> stops, {bool avoidStairs = false, bool optimize = true}) =>
+    tourWithObjective(start, stops, avoidStairs: avoidStairs, optimize: optimize);
 
-  TourResult? tourWithObjective(
-    String start,
-    List<String> stops, {
-    bool avoidStairs = false,
-    bool optimize = true,
-    RouteObjective objective = RouteObjective.shortestDistance,
-  }) {
-    start = normalizeNodeId(start);
-    final ids = <String>[];
-    for (final s in stops) {
-      final id = normalizeNodeId(s);
-      if (id != start && !ids.contains(id) && _nodes.containsKey(id)) ids.add(id);
+  TourResult? tourWithObjective(String start, List<String> stops, {bool avoidStairs = false,
+    bool optimize = true, RouteObjective objective = RouteObjective.shortestDistance}) {
+    start = normalizeNodeId(start); if (!has(start)) return null;
+    final ids = stops.map(normalizeNodeId).where((id) => id != start).toSet().toList();
+    final skipped = <String>[];
+    final distances = <String, Map<String, double>>{};
+    for (final id in <String>[start, ...ids.where(has)]) {
+      distances[id] = _search(id, avoidStairs, objective).dist;
     }
-    if (ids.isEmpty || !_nodes.containsKey(start)) return null;
-
-    final all = [start, ...ids];
-    final d = <String, Map<String, double>>{
-      for (final a in all)
-        a: _dijkstra(
-          a,
-          avoidStairs: avoidStairs,
-          objective: objective,
-        ).dist,
-    };
-    final reachable = [for (final s in ids) if (d[start]![s]!.isFinite) s];
-    final skipped = [for (final s in ids) if (!d[start]![s]!.isFinite) s];
-    if (reachable.isEmpty) return null;
-
-    double cost(List<String> o) {
-      var c = d[start]![o.first]!;
-      for (var i = 0; i + 1 < o.length; i++) {
-        c += d[o[i]]![o[i + 1]]!;
-      }
-      return c;
+    final remaining = <String>[];
+    for (final id in ids) {
+      if (!has(id) || !(distances[start]?[id] ?? double.infinity).isFinite) {
+        skipped.add(id);
+      } else { remaining.add(id); }
     }
-
-    var order = List<String>.of(reachable);
-    if (optimize && order.length > 1) {
-      // nearest neighbour
-      final left = List<String>.of(reachable);
-      order = [];
-      var at = start;
-      while (left.isNotEmpty) {
-        left.sort((a, b) => d[at]![a]!.compareTo(d[at]![b]!));
-        at = left.removeAt(0);
-        order.add(at);
-      }
-      // 2-opt
+    if (remaining.isEmpty) return null;
+    var order = <String>[];
+    var at = start;
+    while (remaining.isNotEmpty) {
+      if (optimize) remaining.sort((a, b) =>
+        (distances[at]?[a] ?? double.infinity).compareTo(distances[at]?[b] ?? double.infinity));
+      at = remaining.removeAt(0); order.add(at);
+    }
+    double cost(List<String> list) {
+      var sum = 0.0, prev = start;
+      for (final id in list) { sum += distances[prev]?[id] ?? double.infinity; prev = id; }
+      return sum;
+    }
+    if (optimize) {
       var improved = true;
       while (improved) {
         improved = false;
-        for (var i = 0; i < order.length - 1; i++) {
-          for (var j = i + 1; j < order.length; j++) {
-            final cand = [
-              ...order.sublist(0, i),
-              ...order.sublist(i, j + 1).reversed,
-              ...order.sublist(j + 1),
-            ];
-            if (cost(cand) + 1e-6 < cost(order)) {
-              order = cand;
-              improved = true;
-            }
+        for (var i = 0; i+1 < order.length; i++) {
+          for (var j = i+1; j < order.length; j++) {
+            final candidate = [...order.take(i), ...order.sublist(i,j+1).reversed, ...order.skip(j+1)];
+            if (cost(candidate)+1e-6 < cost(order)) { order = candidate; improved = true; }
           }
         }
       }
     }
-
-    final legs = <RouteLeg>[];
-    final steps = <RouteStep>[];
+    final legs = <RouteLeg>[], steps = <RouteStep>[];
     var meters = 0.0, seconds = 0.0;
     var stairs = false;
-    var from = start;
+    at = start;
     for (var i = 0; i < order.length; i++) {
-      final r = find(
-        from,
-        order[i],
-        avoidStairs: avoidStairs,
-        objective: objective,
-      );
-      if (r == null) continue;
+      final r = find(at, order[i], avoidStairs: avoidStairs, objective: objective);
+      if (r == null) { skipped.add(order[i]); continue; }
       legs.addAll(r.legs);
       for (final s in r.steps) {
         if (s.kind == StepKind.start && i > 0) continue;
-        if (s.kind == StepKind.arrive) {
-          steps.add(RouteStep(StepKind.stop, mapId: s.mapId, position: s.position, targetId: s.targetId, index: i + 1));
-        } else {
-          steps.add(s);
-        }
+        steps.add(s.kind == StepKind.arrive ? RouteStep(StepKind.stop,
+          mapId: s.mapId, position: s.position, targetId: s.targetId, index: i+1) : s);
       }
-      meters += r.meters;
-      seconds += r.seconds;
-      stairs = stairs || r.usesStairs;
-      from = order[i];
+      meters += r.meters; seconds += r.seconds; stairs = stairs || r.usesStairs;
+      at = order[i];
     }
-    return TourResult(
-      order: order,
-      skipped: skipped,
-      route: RouteResult(legs: legs, steps: steps, meters: meters, seconds: seconds, usesStairs: stairs),
-    );
+    return TourResult(order: order, skipped: skipped, route: RouteResult(
+      legs: legs, steps: steps, meters: meters, seconds: seconds, usesStairs: stairs));
   }
 }
