@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'screens/museum_map_screen.dart';
 import 'screens/trace_navigation_screen.dart';
+import 'screens/surface_navigation_screen.dart';
 import 'state/app_state.dart';
 import 'theme.dart';
 
@@ -17,7 +18,10 @@ class GemNavigatorApp extends StatelessWidget {
         textDirection: AppState.instance.isArabic?TextDirection.rtl:TextDirection.ltr,
         child: child!,
       ),
-      routes: {'/trace-navigation':(_)=>const TraceNavigationScreen()},
+      routes: {
+        '/trace-navigation':(_)=>const TraceNavigationScreen(),
+        '/surface-navigation':(_)=>const SurfaceNavigationScreen(),
+      },
       home: const _MapWithTraceEntry(),
     ),
   );
@@ -27,6 +31,15 @@ class _MapWithTraceEntry extends StatelessWidget {
   @override
   Widget build(BuildContext context)=>Stack(fit:StackFit.expand,children:[
     const MuseumMapScreen(),
+    Positioned(right:12,bottom:246,child:SafeArea(
+      child:FloatingActionButton.extended(
+        heroTag:'surface_navigation_entry',
+        tooltip:'Test the new walking engine',
+        onPressed:()=>Navigator.of(context).pushNamed('/surface-navigation'),
+        icon:const Icon(Icons.directions_walk),
+        label:const Text('New router (test)'),
+      ),
+    )),
     Positioned(right:12,bottom:190,child:SafeArea(
       child:FloatingActionButton.small(
         heroTag:'trace_navigation_entry',

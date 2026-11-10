@@ -1,10 +1,8 @@
 import 'dart:math' as math;
 import 'dart:ui';
 
-/// One floor in plan-space pixels. This is independent of the 2.5D camera.
-/// Floor polygons form a union; obstacle polygons are subtracted.
-/// Geometry must describe physical footprints, not decorative raised faces.
-/// This engine is not yet connected to MuseumGraph.
+/// One floor in plan-space pixels. Camera projection never affects routing.
+/// Used by the experimental preview, not yet by production MuseumGraph.
 class WalkableSurface {
   WalkableSurface({required this.floors, this.obstacles = const []});
   final List<List<Offset>> floors;
@@ -27,8 +25,6 @@ class WalkableSurface {
   Iterable<(Offset,Offset)> _sides(List<Offset> p) sync* {
     for(var i=0;i<p.length;i++) { yield (p[i],p[(i+1)%p.length]); }
   }
-  /// Check the entire segment, including obstacle contact and floor-union gaps.
-  /// Endpoint-only checks and fixed sparse sampling are insufficient.
   bool visible(Offset a, Offset b) {
     if(!contains(a)||!contains(b)) return false;
     final d=b-a;
@@ -55,25 +51,32 @@ class WalkableSurface {
     }
     return true;
   }
-  /// A* over visible floor corners and points just outside obstacle corners.
-  /// There are no driving-lane constraints or arbitrary penalties for turns.
-  /// The tiny corner offset is numerical, not wheelchair/physical clearance.
-  /// Supply suitably inset floors/inflated obstacles when clearance is needed.
+  /// Keep one corner candidate per connected free angular sector instead of
+  /// all 16 samples. This avoids thousands of redundant visibility vertices.
+  /// The 0.001-pixel offset is numerical, NOT physical/accessibility clearance.
+  Iterable<Offset> _cornerCandidates() sync* {
+    for(final p in obstacles.expand((p)=>p)) {
+      final samples=[for(var k=0;k<16;k++)
+        p+Offset(math.cos(k*math.pi/8),math.sin(k*math.pi/8))*0.001];
+      final free=samples.map(contains).toList();
+      for(var k=0;k<16;k++) {
+        if(!free[k]||free[(k+15)%16]) continue;
+        var length=1;
+        while(length<16&&free[(k+length)%16]) { length++; }
+        yield samples[(k+(length-1)~/2)%16];
+      }
+    }
+  }
+  /// A* over the candidate visibility graph, not a car-lane network.
+  /// This is a near-corner approximation, not a surveyed shortest-path proof.
   List<Offset>? route(Offset start, Offset goal) {
     if(!contains(start)||!contains(goal)) return null;
     if(start==goal) return [start];
     if(visible(start,goal)) return [start,goal];
-    final candidates=<Offset>{start,goal,...floors.expand((p)=>p)};
-    for(final p in obstacles.expand((p)=>p)) {
-      for(var k=0;k<16;k++) {
-        final angle=k*math.pi/8;
-        candidates.add(p+Offset(math.cos(angle),math.sin(angle))*0.001);
-      }
-    }
-    final vertices=candidates.where(contains).toList();
+    final vertices=<Offset>{start,goal,...floors.expand((p)=>p),
+      ..._cornerCandidates()}.where(contains).toList();
     final s=vertices.indexOf(start),g=vertices.indexOf(goal);
-    final distances=<int,double>{s:0};
-    final previous=<int,int>{};
+    final distances=<int,double>{s:0},previous=<int,int>{};
     final open=<int>{s},closed=<int>{};
     while(open.isNotEmpty) {
       final at=open.reduce((a,b)=>
