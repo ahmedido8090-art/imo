@@ -25,6 +25,7 @@ class S {
     'im_here': ["I'm here", 'أنا هنا'],
     'you_are_here': ['You are here', 'أنت هنا'],
     'location_set': ['Location set: {x}', 'تم ضبط موقعك: {x}'],
+    'pick_floor': ['Tap a walking area on the map.', 'اضغط على ممر للمشاة على الخريطة.'],
     'no_path': ['No path found to this location.', 'لا يوجد مسار إلى هذا المكان.'],
     'no_step_free': ['No step-free route found.', 'لا يوجد مسار بدون سلالم.'],
     'already_here': ['You are already here.', 'أنت هنا بالفعل.'],

@@ -1,9 +1,9 @@
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 
-/// Lean from straight down: about 29 degrees, rather than the old 53.
+/// Lean from straight down: about 39 degrees for visible wall faces.
 /// Keep a nonzero tilt so wall heights retain their 2.5D appearance.
-const double kMaxTilt = 0.50;
+const double kMaxTilt = 0.68;
 
 class IsoCamera {
   IsoCamera({required this.center, required this.tilt, required Size viewport})

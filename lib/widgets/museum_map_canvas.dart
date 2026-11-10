@@ -119,10 +119,10 @@ class _Prism {
 
 /// Wall height of a region kind, as a fraction of the plan's short side.
 double _heightFactor(RegionKind k) => switch (k) {
-  RegionKind.building => 0.06,
+  RegionKind.building => 0.075,
   RegionKind.attraction => 0.03,
   RegionKind.hall => 0.024,
-  RegionKind.zone => 0.012,
+  RegionKind.zone => 0.019,
   RegionKind.gallery => 0.028,
   RegionKind.garden || RegionKind.parking => 0,
 };
@@ -304,7 +304,7 @@ class _MuseumMapCanvasState extends State<MuseumMapCanvas>
   final Map<String, _Prism> _prismById = {};
   Path _floorPath = Path();
   double _maxHeight = 0;
-  List<Float64List> _routeGeo = const [];
+
 
   List<({MapPlace place, int prio})> _sorted = const [];
   List<_LabelItem> _labelItems = const [];
@@ -336,7 +336,7 @@ class _MuseumMapCanvasState extends State<MuseumMapCanvas>
     _needsFocus = widget.focusPoint != null;
     _liftTo = widget.selectedRegionId;
     _buildScene();
-    _buildRoute();
+
     _sortPins();
     _syncLoop();
   }
@@ -371,7 +371,7 @@ class _MuseumMapCanvasState extends State<MuseumMapCanvas>
       _liftTo = widget.selectedRegionId;
       _liftCtl.forward(from: 0);
     }
-    if (!_sameLegs(old.legs, widget.legs)) _buildRoute();
+
     _sortPins();
     _rebuildLabels();
     _syncLoop();
@@ -387,14 +387,6 @@ class _MuseumMapCanvasState extends State<MuseumMapCanvas>
     _liftCtl.dispose();
     _image?.dispose();
     super.dispose();
-  }
-
-  bool _sameLegs(List<RouteLeg> a, List<RouteLeg> b) {
-    if (a.length != b.length) return false;
-    for (var i = 0; i < a.length; i++) {
-      if (!identical(a[i], b[i])) return false;
-    }
-    return true;
   }
 
   /// The route flow / beacon pulse only run while something is showing them.
@@ -485,43 +477,6 @@ class _MuseumMapCanvasState extends State<MuseumMapCanvas>
       }
     }
     return z;
-  }
-
-  /// Route legs, densified, with the ground height under each step, so the
-  /// ribbon climbs onto roofs instead of hiding under them.
-  void _buildRoute() {
-    final px = _px;
-    final out = <Float64List>[];
-    for (final leg in widget.legs) {
-      final v = <double>[];
-      for (var i = 0; i < leg.points.length; i++) {
-        final b = leg.points[i];
-        if (i == 0) {
-          v.addAll([
-            b.dx * px.width,
-            b.dy * px.height,
-            _groundZ(b, lifted: false),
-          ]);
-          continue;
-        }
-        final a = leg.points[i - 1];
-        final len =
-            (Offset(b.dx * px.width, b.dy * px.height) -
-                    Offset(a.dx * px.width, a.dy * px.height))
-                .distance;
-        final steps = math.max(1, (len / 12).ceil());
-        for (var k = 1; k <= steps; k++) {
-          final n = Offset.lerp(a, b, k / steps)!;
-          v.addAll([
-            n.dx * px.width,
-            n.dy * px.height,
-            _groundZ(n, lifted: false),
-          ]);
-        }
-      }
-      out.add(Float64List.fromList(v));
-    }
-    _routeGeo = out;
   }
 
   // ── artwork: recoloured SVG -> bitmap ──────────────────────────
@@ -1105,7 +1060,7 @@ class _MuseumMapCanvasState extends State<MuseumMapCanvas>
     final s = _screenOf(
       full,
       widget.originPos!,
-      z: _groundZ(widget.originPos!),
+
     );
     if (!_onScreen(s)) return const [];
     return [
@@ -1127,7 +1082,7 @@ class _MuseumMapCanvasState extends State<MuseumMapCanvas>
     for (var i = 0; i < widget.legs.length; i++) {
       final leg = widget.legs[i];
       if (leg.nextMapId == null || leg.points.isEmpty) continue;
-      final s = _screenOf(full, leg.points.last, z: _groundZ(leg.points.last));
+      final s = _screenOf(full, leg.points.last);
       if (!_onScreen(s, 100)) continue;
       res.add(
         Positioned(
@@ -1438,14 +1393,9 @@ class _IsoPainter extends CustomPainter {
       ..strokeCap = StrokeCap.round
       ..strokeJoin = StrokeJoin.round;
 
-    for (var li = 0; li < legs.length && li < s._routeGeo.length; li++) {
-      final g = s._routeGeo[li];
-      final count = g.length ~/ 3;
-      if (count < 2) continue;
-      final pts = [
-        for (var i = 0; i < count; i++)
-          project(full, g[i * 3], g[i * 3 + 1], g[i * 3 + 2] + 0.5),
-      ];
+    for (final leg in legs) {
+      if (leg.points.length < 2) continue;
+      final pts = [for (final p in leg.points) s._screenOf(full, p)];
       var total = 0.0;
       for (var i = 1; i < pts.length; i++) {
         total += (pts[i] - pts[i - 1]).distance;
@@ -1487,7 +1437,7 @@ class _IsoPainter extends CustomPainter {
       }
 
       // destination ring (only where the route really ends)
-      if (legs[li].nextMapId == null && prog >= 0.999) {
+      if (leg.nextMapId == null && prog >= 0.999) {
         final end = pts.last;
         final pulse = s._loop.value;
         canvas.drawCircle(

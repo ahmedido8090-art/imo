@@ -452,13 +452,21 @@ class _MuseumMapScreenState extends State<MuseumMapScreen>
   /// A tap on the map while picking: snap to the nearest routing node there.
   void _onPickTap(Offset n) {
     final id = _graph.nearestNodeId(_map.id, n);
-    if (id != null) _setOriginNode(id);
+    if (id != null) {
+      _setOriginNode(id);
+    } else {
+      _toast.show(S.t('pick_floor'), icon: Icons.my_location);
+    }
   }
 
   /// Long-press: shortcut for "I'm here".
   void _onLongPress(Offset n) {
     final id = _graph.nearestNodeId(_map.id, n);
-    if (id != null) _setOriginNode(id);
+    if (id != null) {
+      _setOriginNode(id);
+    } else {
+      _toast.show(S.t('pick_floor'), icon: Icons.my_location);
+    }
   }
 
   /// Re-plan whatever is on screen (new start, language, step-free…).
@@ -498,6 +506,7 @@ class _MuseumMapScreenState extends State<MuseumMapScreen>
     final normFrom = _graph.normalizeNodeId(from);
     final normTo = _graph.normalizeNodeId(destId);
     if (normTo == normFrom) {
+      _clearRoute();
       if (!quiet) {
         _toast.show(S.t('already_here'), icon: Icons.check_circle_outline);
       }
@@ -505,6 +514,7 @@ class _MuseumMapScreenState extends State<MuseumMapScreen>
     }
     final r = _graph.find(from, destId, avoidStairs: _app.avoidStairs);
     if (r == null) {
+      _clearRoute();
       if (!quiet) {
         _toast.show(
           S.t(_app.avoidStairs ? 'no_step_free' : 'no_path'),
@@ -531,6 +541,7 @@ class _MuseumMapScreenState extends State<MuseumMapScreen>
     }
     final t = _graph.tour(from, ids, avoidStairs: _app.avoidStairs);
     if (t == null) {
+      _clearRoute();
       if (!quiet) {
         _toast.show(
           S.t(_app.avoidStairs ? 'no_step_free' : 'no_path'),

@@ -1,5 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:imo/data/gem_map_data.dart';
+import 'package:imo/data/gem_extras.dart';
 import 'package:imo/data/gem_regions.dart';
 import 'package:imo/data/gem_regions_rooms.dart';
 

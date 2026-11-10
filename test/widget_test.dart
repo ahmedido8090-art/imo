@@ -1,32 +1,51 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:imo/app.dart';
+import 'package:imo/data/gem_extras.dart';
+import 'package:imo/widgets/museum_map_canvas.dart';
 
 void main() {
-  testWidgets('renders the museum map shell', (tester) async {
-    await tester.pumpWidget(const GemNavigatorApp());
-    expect(find.text('GRAND EGYPTIAN MUSEUM'), findsOneWidget);
-    expect(find.text('Grand Staircase · Level 1'), findsOneWidget);
-    expect(find.text('Food'), findsOneWidget);
-    expect(find.text('Gift shop'), findsOneWidget);
-  });
-
-  testWidgets('category pill toggles and map opens pinned location sheet', (
+  testWidgets('I am here and Start route update the normal tilted map', (
     tester,
   ) async {
     await tester.pumpWidget(const GemNavigatorApp());
-    await tester.tap(find.text('Food'));
-    await tester.pumpAndSettle();
-    expect(find.text('Food'), findsOneWidget);
+    await tester.pump();
+    await tester.pump(const Duration(seconds: 1));
+    var canvas = tester.widget<MuseumMapCanvas>(find.byType(MuseumMapCanvas));
+    canvas.onPlaceTap(placeById('mb_entrance')!);
+    await tester.pump();
+    await tester.pump(const Duration(seconds: 1));
+    await tester.ensureVisible(find.text("I'm here"));
+    await tester.tap(find.text("I'm here"));
+    await tester.pump();
+    await tester.pump(const Duration(seconds: 1));
+    canvas = tester.widget<MuseumMapCanvas>(find.byType(MuseumMapCanvas));
+    expect(canvas.originMapId, 'main_building');
+    expect(canvas.originPos, isNotNull);
+    expect(canvas.tilted, isTrue);
 
-    await tester.tap(find.byKey(const Key('open-pin')));
-    await tester.pumpAndSettle();
-    expect(find.text('PINNED LOCATION'), findsOneWidget);
-    expect(find.text('Tutankhamun’s Golden Mask'), findsOneWidget);
-    expect(find.text('Start route'), findsOneWidget);
-
+    canvas.onPlaceTap(placeById('mb_1')!);
+    await tester.pump();
+    await tester.pump(const Duration(seconds: 1));
+    await tester.ensureVisible(find.text('Start route'));
     await tester.tap(find.text('Start route'));
-    await tester.pumpAndSettle();
-    expect(find.text('PINNED LOCATION'), findsNothing);
+    await tester.pump();
+    await tester.pump(const Duration(seconds: 1));
+    canvas = tester.widget<MuseumMapCanvas>(find.byType(MuseumMapCanvas));
+    expect(canvas.legs, isNotEmpty);
+    expect(canvas.legs.first.points.first, canvas.originPos);
+    expect(canvas.routeTargetId, 'mb_1');
+
+    // A new origin on the destination clears the previous route.
+    canvas.onPlaceTap(placeById('mb_1')!);
+    await tester.pump();
+    await tester.pump(const Duration(seconds: 1));
+    await tester.ensureVisible(find.text("I'm here"));
+    await tester.tap(find.text("I'm here"));
+    await tester.pump();
+    await tester.pump(const Duration(seconds: 1));
+    canvas = tester.widget<MuseumMapCanvas>(find.byType(MuseumMapCanvas));
+    expect(canvas.legs, isEmpty);
+    await tester.pumpWidget(const SizedBox());
   });
 }
