@@ -167,6 +167,15 @@ class MuseumGraph {
   final Map<String, MapPlace> _places = {};
 
   // ── build ──────────────────────────────────────────────────────
+  /// A place drawn on this map but located on another floor (e.g. the
+  /// Sakkara Cannon on the ground plan, really on floor 1). It must not be
+  /// reachable step-free, so it joins the graph through a stairs edge and
+  /// step-free visitors have to use the lift portals instead.
+  bool _offFloor(MapPlace p, GemMap m) {
+    final f = placeFloors[p.id];
+    return f != null && f != m.level && !redirects.containsKey(p.id);
+  }
+
   void _build() {
     for (final m in maps.values) {
       for (final p in m.places) {
@@ -180,9 +189,10 @@ class MuseumGraph {
         _link(e.$1, e.$2, stairs: stairEdges.contains('${e.$1}|${e.$2}') || stairEdges.contains('${e.$2}|${e.$1}'));
       }
       for (final p in m.places.where((p) => p.autoConnect)) {
+        final off = _offFloor(p, m);
         final linked = kPinLinks[p.id];
         if (linked != null && m.junctions.containsKey(linked)) {
-          _link(p.id, linked);
+          _link(p.id, linked, stairs: off);
           continue;
         }
         String? best;
@@ -194,7 +204,7 @@ class MuseumGraph {
             best = j.key;
           }
         }
-        if (best != null) _link(p.id, best);
+        if (best != null) _link(p.id, best, stairs: off);
       }
     }
     for (final pt in portals) {
