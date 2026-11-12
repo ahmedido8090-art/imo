@@ -754,6 +754,17 @@ Color _shade(Color c, double k) => Color.from(
   blue: (c.b * k).clamp(0.0, 1.0),
 );
 
+/// Regions lifted out of the veil and outlined: the [selected] room, and every
+/// [highlighted] one (the galleries of the era picked in the timeline). A
+/// gallery that is only selected is not lifted: its traced outline is only
+/// approximate, so its pin marks it; lit as a group, the outlines show which
+/// rooms an era spans.
+@visibleForTesting
+Set<String> focusRegions(List<MapRegion> regions, Set<String> highlighted, String? selected) => {
+  ...highlighted,
+  if (selected != null && regions.where((r) => r.id == selected).firstOrNull?.kind != RegionKind.gallery) selected,
+};
+
 // ═══════════════════════════════════════════════════════════════
 //  Widget
 // ═══════════════════════════════════════════════════════════════
@@ -1353,12 +1364,7 @@ class _MuseumMapCanvasState extends State<MuseumMapCanvas>
     return widget.highlighted.contains(id) ? 0.6 : 0;
   }
 
-  /// Regions lifted out of the veil and outlined. A gallery is not: its traced
-  /// outline is only approximate, so the pin alone marks it.
-  Set<String> get _focusIds => {
-    for (final id in [...widget.highlighted, if (widget.selectedRegionId != null) widget.selectedRegionId!])
-      if (widget.regions.where((r) => r.id == id).firstOrNull?.kind != RegionKind.gallery) id,
-  };
+  Set<String> get _focusIds => focusRegions(widget.regions, widget.highlighted, widget.selectedRegionId);
 
   /// Height of the ground at a normalised point (only solid blocks have a roof).
   double _groundZ(Offset n, {bool lifted = true}) {

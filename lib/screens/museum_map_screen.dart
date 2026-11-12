@@ -250,10 +250,8 @@ class _MuseumMapScreenState extends State<MuseumMapScreen>
       ? _map.places
       : _map.places.where((p) => p.category == _filter || _stopNodes.containsKey(p.id)).toList();
 
-  /// The galleries of the era picked in the timeline.
-  Set<String> get _highlightedIds => _highlightGroup == null
-      ? const <String>{}
-      : {for (final r in _regions) if (r.group == _highlightGroup) r.id};
+  /// The galleries of the era picked in the timeline (lit on the plan).
+  Set<String> get _highlightedIds => regionsInGroup(_regions, _highlightGroup);
 
   // ── maps ───────────────────────────────────────────────────────
   void _setMap(String mapId) {

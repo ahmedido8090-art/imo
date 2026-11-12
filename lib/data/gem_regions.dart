@@ -50,3 +50,8 @@ final List<MapRegion> kRegions = [
 ];
 
 List<MapRegion> regionsFor(String mapId) => [for (final r in kRegions) if (r.mapId == mapId) r];
+
+/// Ids of [regions] in [group] (an era of the Main Galleries: 'era1'…'era4');
+/// none for a null group.
+Set<String> regionsInGroup(List<MapRegion> regions, String? group) =>
+    group == null ? const <String>{} : {for (final r in regions) if (r.group == group) r.id};
