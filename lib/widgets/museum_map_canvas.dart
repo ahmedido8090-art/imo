@@ -692,11 +692,13 @@ class _Figure {
     required this.litDark,
     this.outline,
     this.color = 0,
+    this.base = 0,
   });
   final String id;
   final Offset norm; // anchor, 0..1 (to find the room it stands in)
   final Offset anchor; // map px
   final double height; // map px
+  final double base; // map px: the floor it stands on (a unit's roof, or 0)
   final Float64List xyz; // vertices in map px (x, y, z up)
   final List<int> tris; // three vertex indices per triangle
   final Float64List normals; // outward normal per triangle (unit)
@@ -1160,12 +1162,12 @@ class _MuseumMapCanvasState extends State<MuseumMapCanvas>
     }
     _extraFloors = extra;
     _slabs = slabs;
-    _figures = [
-      for (final f in kFigures[widget.map.id] ?? const <MapFigure>[]) _placeFigure(f, px, u),
-    ];
     _solids = [
       for (final p in prisms)
         if (p.solid) p,
+    ];
+    _figures = [
+      for (final f in kFigures[widget.map.id] ?? const <MapFigure>[]) _placeFigure(f, px, u),
     ];
     _floorPath = floor;
     _maxHeight =
@@ -1173,7 +1175,7 @@ class _MuseumMapCanvasState extends State<MuseumMapCanvas>
           prisms.fold(0.0, (m, p) => math.max(m, p.height)),
           math.max(
             slabs.fold(0.0, (m, s) => math.max(m, s.height)),
-            _figures.fold(0.0, (m, f) => math.max(m, f.height)),
+            _figures.fold(0.0, (m, f) => math.max(m, f.base + f.height)),
           ),
         ) *
         1.8;
@@ -1202,6 +1204,9 @@ class _MuseumMapCanvasState extends State<MuseumMapCanvas>
       );
     }
     final mesh = kMeshes[f.mesh]!;
+    // a mesh stands on whatever is under it: the floor, or the unit it marks
+    // (the mosque on the Prayer Room); statues have their own 'statue' plinths
+    final base = _groundZ(Offset(f.x, f.y), lifted: false);
     final fx = math.cos(f.facing), fy = math.sin(f.facing); // forward, plan coordinates
     final lx = fy, ly = -fx; // the statue's left
     final n = mesh.verts.length ~/ 3;
@@ -1210,7 +1215,7 @@ class _MuseumMapCanvasState extends State<MuseumMapCanvas>
       final pu = mesh.verts[i * 3], pw = mesh.verts[i * 3 + 1], pv = mesh.verts[i * 3 + 2];
       xyz[i * 3] = ax + (lx * pu + fx * pw) * h;
       xyz[i * 3 + 1] = ay + (ly * pu + fy * pw) * h;
-      xyz[i * 3 + 2] = pv * h;
+      xyz[i * 3 + 2] = base + pv * h;
     }
     final t = mesh.tris.length ~/ 3;
     final normals = Float64List(t * 3);
@@ -1248,6 +1253,7 @@ class _MuseumMapCanvasState extends State<MuseumMapCanvas>
       normals: normals,
       lit: lit,
       litDark: litDark,
+      base: base,
     );
   }
 
@@ -2423,15 +2429,15 @@ class _IsoPainter extends CustomPainter {
         if (focus == null || rooms.any((r) => r.contains(f.norm))) f,
     ]..sort((a, b) => (a.anchor.dx * tx + a.anchor.dy * ty).compareTo(b.anchor.dx * tx + b.anchor.dy * ty));
     for (final f in figs) {
-      final foot = project(full, f.anchor.dx, f.anchor.dy, 0);
-      final top = project(full, f.anchor.dx, f.anchor.dy, f.height);
+      final foot = project(full, f.anchor.dx, f.anchor.dy, f.base);
+      final top = project(full, f.anchor.dx, f.anchor.dy, f.base + f.height);
       if (!view.inflate(f.height * 2).contains(foot) && !view.contains(top)) continue;
       if (f.outline != null) {
         _outlineFigure(canvas, full, yaw, f, foot);
         continue;
       }
       // contact shadow
-      final rim = project(full, f.anchor.dx + f.height * 0.22, f.anchor.dy, 0);
+      final rim = project(full, f.anchor.dx + f.height * 0.22, f.anchor.dy, f.base);
       final rx = (rim - foot).distance;
       canvas.drawOval(
         Rect.fromCenter(center: foot, width: rx * 2.4, height: rx * 1.1),

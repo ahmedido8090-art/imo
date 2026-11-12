@@ -47,6 +47,9 @@ Ptolemaic king and queen (mb_3): he wears the Double Crown and a simple kilt; sh
 Victory Column of Merenpetah (mb_2): granite column on a limestone base
   [the-past.com].  Its capital is not described in the sources used, so the shaft
   ends in a plain abacus.
+Mosque (mb_prayer): marks the Prayer Room.  Not a replica of any building: a
+  generic limestone mosque with a domed prayer hall, a pointed entrance portal
+  and two minarets, small enough to stand on the room's unit.
 """
 import math
 import os
@@ -66,6 +69,9 @@ STONE = {
     'frond': 0xff5e7d3a,
     'sand': 0xffd2b07a,
     'steel': 0xff6d7378,
+    'patina': 0xff5f8f80,     # weathered copper of a dome
+    'brass': 0xffc9a24a,
+    'shadow': 0xff4a3c2e,     # doorways and windows
 }
 
 
@@ -310,6 +316,49 @@ def column():
     return M
 
 
+def minaret(M, u, w):
+    """Square base, octagonal shaft with a balcony, conical cap and finial."""
+    lime, cap = STONE['limestone'], STONE['patina']
+    M.box(u - 0.045, u + 0.045, w - 0.045, w + 0.045, 0.04, 0.2, tone(lime, 0.96))
+    M.tube([(u, w, 0.2, 0.034, 0.034), (u, w, 0.62, 0.03, 0.03)], tone(lime, 1.02), n=8)
+    M.tube([(u, w, 0.62, 0.056, 0.056), (u, w, 0.655, 0.056, 0.056)], tone(lime, 1.1), n=8)   # balcony
+    M.tube([(u, w, 0.655, 0.026, 0.026), (u, w, 0.84, 0.024, 0.024)], tone(lime, 1.02), n=8)
+    M.loft([ring(u, w, 0.84, 0.032, 0.032, 8), ring(u, w, 0.965, 0.004, 0.004, 8)], cap)        # cap
+    M.ellipsoid(u, w, 0.98, 0.012, 0.012, 0.018, STONE['brass'], n=6, m=3)
+
+
+def mosque():
+    """A domed prayer hall facing +w, its portal at the front, a minaret either side."""
+    lime, dark = STONE['limestone'], STONE['shadow']
+    M = Mesh()
+    M.box(-0.46, 0.46, -0.26, 0.26, 0.0, 0.04, tone(lime, 0.9))                              # plinth
+    # The hall is a 3 x 3 grid of blocks so that each opening is sorted against
+    # the piece of wall right behind it (the app paints faces far to near by
+    # their centres; one big wall face would be painted over the windows).
+    us, vs = (-0.3, -0.1, 0.1, 0.3), (0.04, 0.14, 0.25, 0.34)
+    for i in range(3):
+        for j in range(3):
+            M.box(us[i], us[i + 1], -0.2, 0.16, vs[j], vs[j + 1], lime)                   # prayer hall
+    M.box(-0.315, 0.315, -0.215, 0.175, 0.34, 0.37, tone(lime, 1.08))                       # cornice
+    for u0, u1 in ((0.17, 0.23), (-0.23, -0.17)):                                            # windows
+        M.box(u0, u1, 0.16, 0.168, 0.14, 0.25, dark, top=(u0 + 0.02, u1 - 0.02, 0.16, 0.168))
+    # portal: a raised frame, the doorway with its pointed arch
+    for v0, v1 in ((0.04, 0.14), (0.14, 0.25), (0.25, 0.3)):
+        M.box(-0.1, 0.1, 0.16, 0.2, v0, v1, tone(lime, 1.1))
+    M.box(-0.055, 0.055, 0.2, 0.208, 0.04, 0.14, dark)
+    M.box(-0.055, 0.055, 0.2, 0.208, 0.14, 0.2, dark)
+    M.box(-0.055, 0.055, 0.2, 0.208, 0.2, 0.25, dark, top=(-0.004, 0.004, 0.2, 0.208))
+    # drum and onion dome over the middle of the hall
+    M.tube([(0, -0.02, 0.37, 0.15, 0.15), (0, -0.02, 0.44, 0.15, 0.15)], tone(lime, 1.04), n=16)
+    M.loft([ring(0, -0.02, v, r, r, 16) for v, r in ((0.44, 0.155), (0.5, 0.172), (0.56, 0.162), (0.62, 0.122),
+                                                      (0.67, 0.062), (0.705, 0.012))], STONE['patina'])
+    M.tube([(0, -0.02, 0.7, 0.008, 0.008), (0, -0.02, 0.76, 0.006, 0.006)], STONE['brass'], n=6)
+    M.ellipsoid(0, -0.02, 0.775, 0.016, 0.016, 0.016, STONE['brass'], n=6, m=3)
+    for su in (1, -1):
+        minaret(M, 0.4 * su, 0.0)
+    return M
+
+
 def palm(seed):
     """Date palm: a ringed, slightly curving trunk and a crown of arching fronds."""
     rnd = random.Random(seed)
@@ -411,7 +460,7 @@ def facing_towards(frm, to):
 
 def meshes():
     out = {'memphis': memphis(), 'tanis': tanis(), 'ptolemaic_pair': ptolemaic_pair(),
-           'obelisk': obelisk(), 'column': column(), 'pyramid': pyramid()}
+           'obelisk': obelisk(), 'column': column(), 'pyramid': pyramid(), 'mosque': mosque()}
     for i in range(4):
         out['palm%d' % i] = palm(100 + i)
     return out
@@ -464,6 +513,7 @@ FOOTPRINTS = {
     'ptolemaic_pair': (-0.3, 0.3, -0.12, 0.17),
     'obelisk': (-0.17, 0.17, -0.17, 0.17),
     'column': (-0.2, 0.2, -0.2, 0.2),
+    'mosque': (-0.46, 0.46, -0.26, 0.26),
 }
 
 
@@ -478,6 +528,9 @@ def figures():
             ('ramesses_san_el_hagar', 0.8726, 0.33355, 0.0569, facing_towards((1418, 295), (1100, 400)), 'tanis', 'mb_5'),
             ('merenptah_column', 1059 / W_mb, 205 / H_mb, 0.05, 0.0, 'column', 'mb_2'),
             ('ptolemaic_pair', 1054 / W_mb, 145 / H_mb, 0.055, facing_towards((1054, 145), (940, 644)), 'ptolemaic_pair', 'mb_3'),
+            # on the Prayer Room's unit (gem_blocks.dart), square to its front edge, the portal towards the
+            # halls; set back on the unit so the room's pin (935, 109) stands in front of it, as with the statues
+            ('mosque_prayer_room', 937 / W_mb, 103 / H_mb, 0.055, facing_towards((917, 111), (920.6, 170.5)), 'mosque', 'mb_prayer'),
         ],
         'gem_complex': [
             ('hanging_obelisk', 787 / W_cx, 880 / H_cx, 0.075, 0.0, 'obelisk', 'cx_obelisk'),
@@ -565,7 +618,7 @@ def write():
 
 def preview(ms, folder):
     from PIL import Image
-    for key in ('memphis', 'tanis', 'ptolemaic_pair', 'obelisk', 'palm0'):
+    for key in ('memphis', 'tanis', 'ptolemaic_pair', 'obelisk', 'palm0', 'mosque'):
         views = [render(ms[key], yaw_deg=a, scale=560 if key in ('memphis', 'tanis') else 420) for a in (0, 35, 90, 180)]
         sheet = Image.new('RGB', (420 * 4, 620), (238, 233, 220))
         for i, im in enumerate(views):
