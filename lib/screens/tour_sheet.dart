@@ -143,8 +143,7 @@ class _TourSheetState extends State<TourSheet> {
                       scrollController: scroll,
                       padding: const EdgeInsets.fromLTRB(8, 4, 8, 8),
                       itemCount: _ids.length,
-                      onReorder: (a, b) => setState(() {
-                        if (b > a) b -= 1;
+                      onReorderItem: (a, b) => setState(() {
                         _ids.insert(b, _ids.removeAt(a));
                         _recompute();
                       }),

@@ -1116,12 +1116,6 @@ class _MuseumMapScreenState extends State<MuseumMapScreen>
   }
 }
 
-extension on Type {
-  Object? operator [](String other) {
-    return null;
-  }
-}
-
 /// Fades the map into the UI colour at the top / bottom edge.
 class _Scrim extends StatelessWidget {
   const _Scrim({required this.color, required this.down});

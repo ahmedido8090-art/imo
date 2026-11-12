@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:math' as math;
-import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart';
@@ -1684,8 +1683,8 @@ class _MuseumMapCanvasState extends State<MuseumMapCanvas>
     final b = _bounds.center;
     return Matrix4.translationValues(c.dx, c.dy, 0)
       ..rotateZ(quarter * math.pi / 2)
-      ..scale(s, s, s)
-      ..translate(-b.dx, -b.dy);
+      ..scaleByDouble(s, s, s, 1)
+      ..translateByDouble(-b.dx, -b.dy, 0, 1);
   }
 
   void _focusOn(Size vp) {
@@ -1700,8 +1699,8 @@ class _MuseumMapCanvasState extends State<MuseumMapCanvas>
     widget.transform.value = _clampPan(
       Matrix4.translationValues(c.dx, c.dy, 0)
         ..rotateZ(_angleOf(cur))
-        ..scale(z, z, z)
-        ..translate(-p.dx * _px.width, -p.dy * _px.height),
+        ..scaleByDouble(z, z, z, 1)
+        ..translateByDouble(-p.dx * _px.width, -p.dy * _px.height, 0, 1),
     );
   }
 
@@ -1714,8 +1713,8 @@ class _MuseumMapCanvasState extends State<MuseumMapCanvas>
     final s = target / _scaleOf(cur);
     final c = _viewCenter;
     final m = Matrix4.translationValues(c.dx, c.dy, 0)
-      ..scale(s, s, s)
-      ..translate(-c.dx, -c.dy);
+      ..scaleByDouble(s, s, s, 1)
+      ..translateByDouble(-c.dx, -c.dy, 0, 1);
     widget.transform.value = _clampPan(m * cur);
   }
 
@@ -1758,8 +1757,8 @@ class _MuseumMapCanvasState extends State<MuseumMapCanvas>
     final s = target / start;
     final m = Matrix4.translationValues(f.dx, f.dy, 0)
       ..rotateZ(d.rotation)
-      ..scale(s, s, s)
-      ..translate(-_startFlat.dx, -_startFlat.dy);
+      ..scaleByDouble(s, s, s, 1)
+      ..translateByDouble(-_startFlat.dx, -_startFlat.dy, 0, 1);
     widget.transform.value = _clampPan(m * _startM);
   }
 
@@ -1772,8 +1771,8 @@ class _MuseumMapCanvasState extends State<MuseumMapCanvas>
     final s = target / _scaleOf(cur);
     final f = _cam().toFlat(e.localPosition);
     final m = Matrix4.translationValues(f.dx, f.dy, 0)
-      ..scale(s, s, s)
-      ..translate(-f.dx, -f.dy);
+      ..scaleByDouble(s, s, s, 1)
+      ..translateByDouble(-f.dx, -f.dy, 0, 1);
     widget.transform.value = _clampPan(m * cur);
   }
 
@@ -2694,7 +2693,7 @@ class _IsoPainter extends CustomPainter {
       canvas.clipPath(roof, doAntiAlias: true);
       canvas.drawPath(roof, Paint()..color = _floorColor);
       if (s._image != null) {
-        canvas.transform((full.clone()..translate(0.0, 0.0, h)).storage);
+        canvas.transform((full.clone()..translateByDouble(0, 0, h, 1)).storage);
         _art(canvas, s._px);
       }
       canvas.restore();
