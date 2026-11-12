@@ -1938,7 +1938,8 @@ class _MuseumMapCanvasState extends State<MuseumMapCanvas>
   Widget _screenLayer(GemPalette p) {
     final full = _full();
     final zoom = math.max(1e-6, _scaleOf(widget.transform.value));
-    final pins = _layoutPins(full, zoom);
+    final chips = _placeChips(full);
+    final pins = _layoutPins(full, zoom, [for (final c in chips) c.box]);
     final sel = widget.selected;
     _pinRects = [
       for (final c in pins)
@@ -1949,7 +1950,7 @@ class _MuseumMapCanvasState extends State<MuseumMapCanvas>
       children: [
         ..._markers(full, p),
         ..._pinWidgets(pins),
-        ..._chips(full, p),
+        ..._chips(chips, p),
       ],
     );
   }
@@ -1976,7 +1977,9 @@ class _MuseumMapCanvasState extends State<MuseumMapCanvas>
   }
 
   // ── which pins to show (thinned so they never pile up) ─────────
-  List<_Placed> _layoutPins(Matrix4 full, double zoom) {
+  /// [covers]: callouts placed on top of the plan; like [MuseumMapCanvas.keepClear],
+  /// a pin mostly under one waits until the map is panned.
+  List<_Placed> _layoutPins(Matrix4 full, double zoom, [List<Rect> covers = const []]) {
     final rel = zoom / math.max(1e-6, _fit0);
     final denseVisible = widget.showAllPins || rel >= _denseZoom;
     final out = <_Placed>[];
@@ -2000,8 +2003,7 @@ class _MuseumMapCanvasState extends State<MuseumMapCanvas>
       // until the map is panned clear of it. Selected, route-target and saved
       // pins (prio <= 2) are never dropped.
       if (c.prio > 2 &&
-          widget.keepClear.isNotEmpty &&
-          _coveredShare(_pinBox(pl, s), widget.keepClear) > 0.3) {
+          _coveredShare(_pinBox(pl, s), [...widget.keepClear, ...covers]) > 0.3) {
         continue;
       }
       if (c.prio > 2) {
@@ -2084,34 +2086,85 @@ class _MuseumMapCanvasState extends State<MuseumMapCanvas>
     ];
   }
 
+  /// Size of an exit callout's box (the chip is centred in it).
+  static const Size _chipBox = Size(280, 64);
+
   /// Where a leg ends at stairs, a lift, the moving walkway or a door, a callout
-  /// says what to do there; when the route goes on in another plan, tapping
-  /// it opens that plan.
-  List<Widget> _chips(Matrix4 full, GemPalette p) {
-    final res = <Widget>[];
+  /// says what to do there. It goes above that spot, or below it when above
+  /// would cover the top bar, a map button or a pin that is always shown (the
+  /// selected place, the destination, saved places, trip stops); it is kept on
+  /// screen and slid sideways off the map buttons.
+  List<({int leg, Rect box})> _placeChips(Matrix4 full) {
+    final out = <({int leg, Rect box})>[];
+    final fixed = <Rect>[];
+    for (final c in _sorted) {
+      if (c.prio > 2) break; // sorted by priority
+      final s = _screenOf(full, c.place.position, z: _groundZ(c.place.position));
+      if (_onScreen(s)) fixed.add(_pinBox(c.place, s, selected: c.place.id == widget.selected?.id));
+    }
+    final w = _chipBox.width, h = _chipBox.height;
+    final top = widget.padding.top - 8;
+    Rect onScreen(Rect r) => r.shift(Offset((8 - r.left).clamp(0.0, double.infinity) - (r.right - (_vp.width - 8)).clamp(0.0, double.infinity), 0));
+    Rect offButtons(Rect r) {
+      for (final k in widget.keepClear) {
+        if (!r.overlaps(k)) continue;
+        final left = r.shift(Offset(k.left - 4 - r.right, 0)), right = r.shift(Offset(k.right + 4 - r.left, 0));
+        final fitsLeft = left.left >= 8, fitsRight = right.right <= _vp.width - 8;
+        if (fitsLeft && (!fitsRight || r.center.dx <= k.center.dx)) {
+          r = left;
+        } else if (fitsRight) {
+          r = right;
+        }
+      }
+      return r;
+    }
+
+    int clashes(Rect r) =>
+        (r.top < top ? 2 : 0) +
+        widget.keepClear.where(r.overlaps).length * 2 +
+        fixed.where((f) => r.deflate(4).overlaps(f)).length +
+        out.where((o) => r.overlaps(o.box)).length;
+
     for (var i = 0; i < widget.legs.length; i++) {
       final leg = widget.legs[i];
       if (leg.portal == null || leg.points.isEmpty) continue;
       final s = _screenOf(full, leg.points.last, z: _groundZ(leg.points.last));
       if (!_onScreen(s, 120)) continue;
-      final next = leg.nextMapId == null ? null : allMaps[leg.nextMapId!];
+      Rect? best;
+      var bestScore = 1 << 30;
+      for (final y in [s.dy - h - 26, s.dy + 18]) {
+        final r = offButtons(onScreen(Rect.fromLTWH(s.dx - w / 2, y, w, h)));
+        final score = clashes(r);
+        if (score < bestScore) {
+          best = r;
+          bestScore = score;
+        }
+        if (score == 0) break;
+      }
+      out.add((leg: i, box: best!));
+    }
+    return out;
+  }
+
+  List<Widget> _chips(List<({int leg, Rect box})> placed, GemPalette p) {
+    final res = <Widget>[];
+    for (final (:leg, :box) in placed) {
+      final l = widget.legs[leg];
+      final next = l.nextMapId == null ? null : allMaps[l.nextMapId!];
       res.add(
-        Positioned(
-          key: ValueKey('chip_$i'),
-          left: s.dx - 140,
-          top: s.dy - 64 - 26,
-          width: 280,
-          height: 64,
+        Positioned.fromRect(
+          key: ValueKey('chip_$leg'),
+          rect: box,
           child: Center(
             child: _ExitChip(
               pal: p,
-              icon: switch (leg.portal!.kind) {
+              icon: switch (l.portal!.kind) {
                 PortalKind.stairs => Icons.stairs,
                 PortalKind.lift => Icons.elevator,
                 PortalKind.travelator => Icons.moving,
                 PortalKind.door => Icons.login,
               },
-              label: leg.exitStep == null ? '' : S.step(leg.exitStep!),
+              label: l.exitStep == null ? '' : S.step(l.exitStep!),
               detail: next == null ? null : S.t('tap_to_open', x: S.mapShort(next)),
               onTap: next == null ? null : () => widget.onPortalTap(next.id),
             ),

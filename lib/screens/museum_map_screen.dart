@@ -1,6 +1,8 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 
 import '../data/gem_extras.dart';
 import '../data/gem_map_data.dart';
@@ -82,6 +84,13 @@ class _MuseumMapScreenState extends State<MuseumMapScreen>
   Offset? _focusPoint;
   int _focusTick = 0;
   final Map<String, int> _quarter = {};
+
+  /// Measured height of the bottom stack (route card, era timeline, tabs).
+  double? _bottomH;
+
+  /// Landscape when last built: turning the device fits the map again, into
+  /// the room the new layout leaves it.
+  bool? _wasWide;
 
   late final AnimationController _routeAnim = AnimationController(
     vsync: this,
@@ -725,20 +734,45 @@ class _MuseumMapScreenState extends State<MuseumMapScreen>
     // The control column sits at the *end* edge (the left one in Arabic), so the
     // room kept free for it is on that side too.
     final rtl = Directionality.of(context) == TextDirection.rtl;
-    final gutter = tall ? 60.0 : 12.0;
-    final screenW = MediaQuery.sizeOf(context).width;
+    final screen = MediaQuery.sizeOf(context);
+    final screenW = screen.width;
+    final gutter = tall || screenW > screen.height ? 60.0 : 12.0;
+    // in landscape the notch side has an inset too
+    final endInset = rtl ? safe.left : safe.right;
     // locate (46) + gap + zoom pill (89) + gap + my tour (46), at end: 12, top: safe.top + 124
     final controlsRect = Rect.fromLTWH(
-      rtl ? 12 : screenW - 12 - 46,
+      rtl ? 12 + endInset : screenW - 12 - 46 - endInset,
       safe.top + 124,
       46,
       46 + 10 + 89 + 10 + 46,
     ).inflate(6);
+    // The bottom stack is never wider than a phone. In landscape it sits at the
+    // start edge, so it never runs under the control column at the end edge,
+    // and the map is fitted beside it instead of above it.
+    final wide = screenW > screen.height;
+    if (_wasWide != null && _wasWide != wide) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _resetView();
+      });
+    }
+    _wasWide = wide;
+    final panelW = math.min(wide ? 440.0 : 560.0, screenW - safe.horizontal - (wide ? 12 + 46 + 12 + 12 : 0));
+    final bottomH = _bottomH ?? (galleries ? 110 : 66) + (_route != null ? 76 : 0);
+    // the map is fitted above the stack, but always keeps half the screen
+    final stackTop = safe.bottom + 10 + bottomH + 8;
+    final bottomPad = math.min(stackTop, screen.height * .5);
+    final panelRect = Rect.fromLTWH(
+      wide ? (rtl ? screenW - safe.right - panelW : safe.left) : (screenW - panelW) / 2,
+      screen.height - safe.bottom - 10 - bottomH,
+      panelW,
+      bottomH,
+    );
+    final side = (wide ? panelW : 0) + 8; // the start edge, past the stack in landscape
     final mapPadding = EdgeInsets.fromLTRB(
-      rtl ? gutter : 8,
+      rtl ? gutter + endInset : safe.left + side,
       safe.top + 112,
-      rtl ? 8 : gutter,
-      safe.bottom + (galleries ? 128 : 84) + (_route != null ? 76 : 0),
+      rtl ? safe.right + side : gutter + endInset,
+      wide ? safe.bottom + 12 : bottomPad,
     );
     final legs = _route?.legsOn(_map.id) ?? const <RouteLeg>[];
 
@@ -780,7 +814,8 @@ class _MuseumMapScreenState extends State<MuseumMapScreen>
                         if (mounted) setState(() => _focusPoint = null);
                       }),
                   padding: mapPadding,
-                  keepClear: [controlsRect],
+                  // the stack only covers the map where it is taller than the padding
+                  keepClear: [controlsRect, if (wide || bottomPad < stackTop) panelRect],
                   onPlaceTap: _selectPlace,
                   onRegionTap: _onRegionTap,
                   onEmptyTap: () => setState(() {
@@ -881,7 +916,7 @@ class _MuseumMapScreenState extends State<MuseumMapScreen>
 
           // ── right: map controls (three, not five) ──
           PositionedDirectional(
-            end: 12,
+            end: 12 + endInset,
             top: safe.top + 124,
             child: Column(
               children: [
@@ -917,41 +952,52 @@ class _MuseumMapScreenState extends State<MuseumMapScreen>
 
           // ── bottom: route card, era timeline, tabs ──
           Positioned(
-            left: 0,
-            right: 0,
+            left: safe.left,
+            right: safe.right,
             bottom: safe.bottom + 10,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                AnimatedSize(
-                  duration: const Duration(milliseconds: 260),
-                  curve: Curves.easeOutCubic,
-                  alignment: Alignment.bottomCenter,
-                  child: _route == null
-                      ? const SizedBox(width: double.infinity)
-                      : Padding(
-                          padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
-                          child: _routeCard(p),
+            child: Align(
+              alignment: wide ? AlignmentDirectional.bottomStart : Alignment.bottomCenter,
+              child: SizedBox(
+                width: panelW,
+                child: _SizeReporter(
+                  onSize: (sz) {
+                    if (mounted && (sz.height - (_bottomH ?? -1)).abs() > .5) setState(() => _bottomH = sz.height);
+                  },
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      AnimatedSize(
+                        duration: const Duration(milliseconds: 260),
+                        curve: Curves.easeOutCubic,
+                        alignment: Alignment.bottomCenter,
+                        child: _route == null
+                            ? const SizedBox(width: double.infinity)
+                            : Padding(
+                                padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+                                child: _routeCard(p),
+                              ),
+                      ),
+                      if (galleries) ...[
+                        EraBar(
+                          selected: _highlightGroup,
+                          onSelect: (e) => setState(() => _highlightGroup = e),
                         ),
+                        const SizedBox(height: 8),
+                      ],
+                      if (parent != null)
+                        _BackPill(
+                          label: S.t('back_to', x: S.mapShort(allMaps[parent]!)),
+                          onTap: () => _setMap(parent),
+                        )
+                      else
+                        _MapSwitcher(
+                          currentMapId: _map.id,
+                          onSwitch: (id) => id == _map.id ? _resetView() : _setMap(id),
+                        ),
+                    ],
+                  ),
                 ),
-                if (galleries) ...[
-                  EraBar(
-                    selected: _highlightGroup,
-                    onSelect: (e) => setState(() => _highlightGroup = e),
-                  ),
-                  const SizedBox(height: 8),
-                ],
-                if (parent != null)
-                  _BackPill(
-                    label: S.t('back_to', x: S.mapShort(allMaps[parent]!)),
-                    onTap: () => _setMap(parent),
-                  )
-                else
-                  _MapSwitcher(
-                    currentMapId: _map.id,
-                    onSwitch: (id) => id == _map.id ? _resetView() : _setMap(id),
-                  ),
-              ],
+              ),
             ),
           ),
 
@@ -1116,6 +1162,34 @@ class _MuseumMapScreenState extends State<MuseumMapScreen>
   }
 }
 
+/// Reports its child's size after every layout that changes it (the bottom
+/// stack, so the map is fitted above whatever it holds right now).
+class _SizeReporter extends SingleChildRenderObjectWidget {
+  const _SizeReporter({required this.onSize, super.child});
+  final ValueChanged<Size> onSize;
+
+  @override
+  RenderObject createRenderObject(BuildContext context) => _RenderSizeReporter(onSize);
+
+  @override
+  void updateRenderObject(BuildContext context, _RenderSizeReporter r) => r.onSize = onSize;
+}
+
+class _RenderSizeReporter extends RenderProxyBox {
+  _RenderSizeReporter(this.onSize);
+  ValueChanged<Size> onSize;
+  Size? _last;
+
+  @override
+  void performLayout() {
+    super.performLayout();
+    if (size == _last) return;
+    _last = size;
+    final s = size;
+    WidgetsBinding.instance.addPostFrameCallback((_) => onSize(s));
+  }
+}
+
 /// Fades the map into the UI colour at the top / bottom edge.
 class _Scrim extends StatelessWidget {
   const _Scrim({required this.color, required this.down});
@@ -1158,73 +1232,77 @@ class _MapSwitcher extends StatelessWidget {
         .where((m) => !kSubMapParent.containsKey(m.id))
         .toList();
     return Center(
-      child: Container(
-        padding: const EdgeInsets.all(4),
-        decoration: BoxDecoration(
-          color: p.surface,
-          borderRadius: BorderRadius.circular(28),
-          border: Border.all(color: p.line.withValues(alpha: .8)),
-          boxShadow: gemShadow(p, lift: 1.2),
-        ),
-        // the tabs' ink needs a Material above the pill's colour
-        child: Material(
-          type: MaterialType.transparency,
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              for (final m in maps)
-                Semantics(
-                  button: true,
-                  selected: m.id == currentMapId,
-                  hint: m.id == currentMapId ? S.t('fit_hint') : null,
-                  child: InkWell(
-                    onTap: () => onSwitch(m.id),
-                    borderRadius: BorderRadius.circular(24),
-                    child: AnimatedContainer(
-                      duration: const Duration(milliseconds: 220),
-                      curve: Curves.easeOutCubic,
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 14,
-                        vertical: 7,
-                      ),
-                      decoration: BoxDecoration(
-                        color: m.id == currentMapId ? p.accent : Colors.transparent,
-                        borderRadius: BorderRadius.circular(24),
-                      ),
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(
-                            _icon(m.id),
-                            size: 19,
-                            color: m.id == currentMapId ? p.onAccent : p.muted,
-                          ),
-                          const SizedBox(height: 2),
-                          Text(
-                            S.mapShort(m),
-                            style: TextStyle(
-                              fontFamily: 'Arial',
-                              fontSize: 14,
-                              fontWeight: FontWeight.w800,
-                              color: m.id == currentMapId ? p.onAccent : p.ink,
+      // in a narrow stack (landscape, long names, large text) it shrinks to fit
+      child: FittedBox(
+        fit: BoxFit.scaleDown,
+        child: Container(
+          padding: const EdgeInsets.all(4),
+          decoration: BoxDecoration(
+            color: p.surface,
+            borderRadius: BorderRadius.circular(28),
+            border: Border.all(color: p.line.withValues(alpha: .8)),
+            boxShadow: gemShadow(p, lift: 1.2),
+          ),
+          // the tabs' ink needs a Material above the pill's colour
+          child: Material(
+            type: MaterialType.transparency,
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                for (final m in maps)
+                  Semantics(
+                    button: true,
+                    selected: m.id == currentMapId,
+                    hint: m.id == currentMapId ? S.t('fit_hint') : null,
+                    child: InkWell(
+                      onTap: () => onSwitch(m.id),
+                      borderRadius: BorderRadius.circular(24),
+                      child: AnimatedContainer(
+                        duration: const Duration(milliseconds: 220),
+                        curve: Curves.easeOutCubic,
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 14,
+                          vertical: 7,
+                        ),
+                        decoration: BoxDecoration(
+                          color: m.id == currentMapId ? p.accent : Colors.transparent,
+                          borderRadius: BorderRadius.circular(24),
+                        ),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              _icon(m.id),
+                              size: 19,
+                              color: m.id == currentMapId ? p.onAccent : p.muted,
                             ),
-                          ),
-                          Text(
-                            S.levelTag(m),
-                            style: TextStyle(
-                              fontFamily: 'Arial',
-                              fontSize: 12,
-                              color: m.id == currentMapId
-                                  ? p.onAccent.withValues(alpha: .75)
-                                  : p.muted,
+                            const SizedBox(height: 2),
+                            Text(
+                              S.mapShort(m),
+                              style: TextStyle(
+                                fontFamily: 'Arial',
+                                fontSize: 14,
+                                fontWeight: FontWeight.w800,
+                                color: m.id == currentMapId ? p.onAccent : p.ink,
+                              ),
                             ),
-                          ),
-                        ],
+                            Text(
+                              S.levelTag(m),
+                              style: TextStyle(
+                                fontFamily: 'Arial',
+                                fontSize: 12,
+                                color: m.id == currentMapId
+                                    ? p.onAccent.withValues(alpha: .75)
+                                    : p.muted,
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
                     ),
                   ),
-                ),
-            ],
+              ],
+            ),
           ),
         ),
       ),
