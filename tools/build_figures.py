@@ -49,7 +49,8 @@ Victory Column of Merenpetah (mb_2): granite column on a limestone base
   ends in a plain abacus.
 Mosque (mb_prayer): marks the Prayer Room.  Not a replica of any building: a
   generic limestone mosque with a domed prayer hall, a pointed entrance portal
-  and two minarets, small enough to stand on the room's unit.
+  and two minarets.  It takes the room's unit over whole (the unit is not drawn):
+  its plinth is fitted to the unit's outline (fit_to below).
 """
 import math
 import os
@@ -327,27 +328,57 @@ def minaret(M, u, w):
     M.ellipsoid(u, w, 0.98, 0.012, 0.012, 0.018, STONE['brass'], n=6, m=3)
 
 
+def panel_box(M, u0, u1, w0, w1, v0, v1, color, holes=(), step=0.06):
+    """A box whose front face (w = w1) is a grid of tiles, the tiles inside
+    `holes` ((u0, u1, v0, v1) each: doorways, windows) dark.  Openings are part
+    of the wall's own plane, so the far-to-near face sort can never paint the
+    wall over them (separate thin boxes on a wall flicker behind it)."""
+    cut_u = {u0, u1, *[x for h in holes for x in h[:2]]}
+    cut_v = {v0, v1, *[y for h in holes for y in h[2:]]}
+    n = max(1, round((u1 - u0) / step))
+    cut_u |= {u0 + (u1 - u0) * k / n for k in range(1, n)}
+    us = sorted(x for x in cut_u if u0 <= x <= u1)
+    vs = sorted(y for y in cut_v if v0 <= y <= v1)
+    verts, tris = [], []
+    for u in us:
+        for v in vs:
+            verts.append((u, w1, v))
+    nv = len(vs)
+    for i in range(len(us) - 1):
+        for j in range(nv - 1):
+            a, b, c, d = i * nv + j, (i + 1) * nv + j, (i + 1) * nv + j + 1, i * nv + j + 1
+            tris += [(a, b, c), (a, c, d)]
+    dark = STONE['shadow']
+
+    def tile(m, k):
+        if abs(m[1] - w1) < 1e-9 and any(h[0] < m[0] < h[1] and h[2] < m[2] < h[3] for h in holes):
+            return dark
+        return color
+    # the other five faces
+    o = len(verts)
+    verts += [(u0, w0, v0), (u1, w0, v0), (u1, w0, v1), (u0, w0, v1)]
+    fl, fr = 0 * nv, (len(us) - 1) * nv          # front corners at v0
+    flt, frt = nv - 1, (len(us) - 1) * nv + nv - 1  # and at v1
+    bl, br, brt, blt = o, o + 1, o + 2, o + 3
+    tris += [(bl, br, brt), (bl, brt, blt),            # back
+             (fl, bl, blt), (fl, blt, flt),            # left
+             (fr, frt, brt), (fr, brt, br),            # right
+             (flt, blt, brt), (flt, brt, frt),         # top
+             (fl, fr, br), (fl, br, bl)]               # bottom
+    M.add(verts, tris, tile, centre=((u0 + u1) / 2, (w0 + w1) / 2, (v0 + v1) / 2))
+
+
 def mosque():
     """A domed prayer hall facing +w, its portal at the front, a minaret either side."""
-    lime, dark = STONE['limestone'], STONE['shadow']
+    lime = STONE['limestone']
     M = Mesh()
     M.box(-0.46, 0.46, -0.26, 0.26, 0.0, 0.04, tone(lime, 0.9))                              # plinth
-    # The hall is a 3 x 3 grid of blocks so that each opening is sorted against
-    # the piece of wall right behind it (the app paints faces far to near by
-    # their centres; one big wall face would be painted over the windows).
-    us, vs = (-0.3, -0.1, 0.1, 0.3), (0.04, 0.14, 0.25, 0.34)
-    for i in range(3):
-        for j in range(3):
-            M.box(us[i], us[i + 1], -0.2, 0.16, vs[j], vs[j + 1], lime)                   # prayer hall
+    panel_box(M, -0.3, 0.3, -0.2, 0.16, 0.04, 0.34, lime,                                    # prayer hall
+              holes=[(0.17, 0.23, 0.14, 0.25), (-0.23, -0.17, 0.14, 0.25)])                  # windows
     M.box(-0.315, 0.315, -0.215, 0.175, 0.34, 0.37, tone(lime, 1.08))                       # cornice
-    for u0, u1 in ((0.17, 0.23), (-0.23, -0.17)):                                            # windows
-        M.box(u0, u1, 0.16, 0.168, 0.14, 0.25, dark, top=(u0 + 0.02, u1 - 0.02, 0.16, 0.168))
-    # portal: a raised frame, the doorway with its pointed arch
-    for v0, v1 in ((0.04, 0.14), (0.14, 0.25), (0.25, 0.3)):
-        M.box(-0.1, 0.1, 0.16, 0.2, v0, v1, tone(lime, 1.1))
-    M.box(-0.055, 0.055, 0.2, 0.208, 0.04, 0.14, dark)
-    M.box(-0.055, 0.055, 0.2, 0.208, 0.14, 0.2, dark)
-    M.box(-0.055, 0.055, 0.2, 0.208, 0.2, 0.25, dark, top=(-0.004, 0.004, 0.2, 0.208))
+    # portal: a raised frame, the doorway with its pointed arch (stepped)
+    panel_box(M, -0.1, 0.1, 0.16, 0.2, 0.04, 0.3, tone(lime, 1.1), step=0.02,
+              holes=[(-0.055, 0.055, 0.04, 0.2), (-0.035, 0.035, 0.2, 0.23), (-0.015, 0.015, 0.23, 0.25)])
     # drum and onion dome over the middle of the hall
     M.tube([(0, -0.02, 0.37, 0.15, 0.15), (0, -0.02, 0.44, 0.15, 0.15)], tone(lime, 1.04), n=16)
     M.loft([ring(0, -0.02, v, r, r, 16) for v, r in ((0.44, 0.155), (0.5, 0.172), (0.56, 0.162), (0.62, 0.122),
@@ -357,6 +388,35 @@ def mosque():
     for su in (1, -1):
         minaret(M, 0.4 * su, 0.0)
     return M
+
+
+# The Prayer Room's unit on the Building plan (map px): front-left, front-right,
+# back-left corners of its outline (a parallelogram, square to the building grid).
+PRAYER_ROOM = ((891.4, 135.4), (961.1, 131.2), (908.5, 91.7))  # its edges extended to meet
+MOSQUE_H = 0.07  # of the plan's short side
+MOSQUE_BASE = (-0.46, 0.46, -0.26, 0.26)  # the plinth, (u0, u1, w0, w1)
+
+
+def fit_to(m, corners, h_px, base=MOSQUE_BASE):
+    """m with its base rectangle mapped onto the plan parallelogram `corners`
+    (front-left, front-right, back-left, map px), in the frame the canvas places
+    it in (anchor at the parallelogram's centre, facing its front edge's
+    outward normal; units of h_px).  Returns the mesh, anchor and facing."""
+    fl, fr, bl = corners
+    ax, ay = (fr[0] + bl[0]) / 2, (fr[1] + bl[1]) / 2
+    ex, ey = fr[0] - fl[0], fr[1] - fl[1]
+    facing = math.atan2(ex, -ey)  # the front edge turned a quarter: outwards, away from the back
+    fx, fy = math.cos(facing), math.sin(facing)
+    lx, ly = fy, -fx
+    u0, u1, w0, w1 = base
+
+    def f(p):
+        su, tw = (p[0] - u0) / (u1 - u0), (w1 - p[1]) / (w1 - w0)  # 0..1 left to right, front to back
+        x = fl[0] + su * ex + tw * (bl[0] - fl[0])
+        y = fl[1] + su * ey + tw * (bl[1] - fl[1])
+        dx, dy = x - ax, y - ay
+        return ((dx * lx + dy * ly) / h_px, (dx * fx + dy * fy) / h_px, p[2])
+    return m.transformed(f), (ax, ay), facing
 
 
 def palm(seed):
@@ -460,7 +520,8 @@ def facing_towards(frm, to):
 
 def meshes():
     out = {'memphis': memphis(), 'tanis': tanis(), 'ptolemaic_pair': ptolemaic_pair(),
-           'obelisk': obelisk(), 'column': column(), 'pyramid': pyramid(), 'mosque': mosque()}
+           'obelisk': obelisk(), 'column': column(), 'pyramid': pyramid(),
+           'mosque': fit_to(mosque(), PRAYER_ROOM, MOSQUE_H * 885.0)[0]}
     for i in range(4):
         out['palm%d' % i] = palm(100 + i)
     return out
@@ -513,14 +574,20 @@ FOOTPRINTS = {
     'ptolemaic_pair': (-0.3, 0.3, -0.12, 0.17),
     'obelisk': (-0.17, 0.17, -0.17, 0.17),
     'column': (-0.2, 0.2, -0.2, 0.2),
-    'mosque': (-0.46, 0.46, -0.26, 0.26),
 }
+
+
+def base_box(m):
+    """(u0, u1, w0, w1) around a mesh's foot (a fitted mesh is no longer a box)."""
+    foot = [p for p in m.v if p[2] <= 0.001]
+    return (min(p[0] for p in foot), max(p[0] for p in foot), min(p[1] for p in foot), max(p[1] for p in foot))
 
 
 def figures():
     """(id, x, y, height, facing, mesh, placeId) per map."""
     W_mb, H_mb = 1625.0, 885.0
     W_cx, H_cx = 1790.0, 1080.0
+    _, mosque_at, mosque_facing = fit_to(mosque(), PRAYER_ROOM, MOSQUE_H * H_mb)
     return {
         'main_building': [
             # each colossus stands on its plinth (the 'statue' slabs in gem_blocks.dart)
@@ -528,9 +595,8 @@ def figures():
             ('ramesses_san_el_hagar', 0.8726, 0.33355, 0.0569, facing_towards((1418, 295), (1100, 400)), 'tanis', 'mb_5'),
             ('merenptah_column', 1059 / W_mb, 205 / H_mb, 0.05, 0.0, 'column', 'mb_2'),
             ('ptolemaic_pair', 1054 / W_mb, 145 / H_mb, 0.055, facing_towards((1054, 145), (940, 644)), 'ptolemaic_pair', 'mb_3'),
-            # on the Prayer Room's unit (gem_blocks.dart), square to its front edge, the portal towards the
-            # halls; set back on the unit so the room's pin (935, 109) stands in front of it, as with the statues
-            ('mosque_prayer_room', 937 / W_mb, 103 / H_mb, 0.055, facing_towards((917, 111), (920.6, 170.5)), 'mosque', 'mb_prayer'),
+            # in place of the Prayer Room's unit, filling its outline, the portal towards the halls
+            ('mosque_prayer_room', mosque_at[0] / W_mb, mosque_at[1] / H_mb, MOSQUE_H, mosque_facing, 'mosque', 'mb_prayer'),
         ],
         'gem_complex': [
             ('hanging_obelisk', 787 / W_cx, 880 / H_cx, 0.075, 0.0, 'obelisk', 'cx_obelisk'),
@@ -605,7 +671,7 @@ def write():
     for mid, figs in figures().items():
         L.append("  '%s': [" % mid)
         for fid, x, y, h, facing, mesh, pid in figs:
-            fp = FOOTPRINTS.get(mesh)
+            fp = FOOTPRINTS.get(mesh) or (base_box(ms[mesh]) if mesh == 'mosque' else None)
             L.append("    MapFigure('%s', %s, %s, %s, %s, '%s', [%s]%s)," % (
                 fid, fmt(x), fmt(y), fmt(h), fmt(facing), mesh, ', '.join(fmt(c) for c in fp) if fp else '',
                 ", '%s'" % pid if pid else ''))
