@@ -17,6 +17,7 @@ import '../data/gem_floors.dart';
 import '../data/gem_map_data.dart';
 import '../i18n/strings.dart';
 import '../models/map_models.dart';
+import '../models/rostau.dart';
 import '../services/route_finder.dart';
 import '../theme.dart';
 import 'gem_ui.dart';
@@ -791,6 +792,9 @@ class MuseumMapCanvas extends StatefulWidget {
     this.onFocusDone,
     this.padding = EdgeInsets.zero,
     this.keepClear = const <Rect>[],
+    this.walkedLegs = const <RouteLeg>[],
+    this.trip,
+    this.stopNodes = const <String, String>{},
   });
 
   final GemMap map;
@@ -803,6 +807,13 @@ class MuseumMapCanvas extends StatefulWidget {
 
   /// Route pieces that lie on this map.
   final List<RouteLeg> legs;
+
+  /// The part of a walk already behind the visitor, on this map (drawn faded).
+  final List<RouteLeg> walkedLegs;
+
+  /// The walk being followed, and its stops: place id -> routing node.
+  final TripProgress? trip;
+  final Map<String, String> stopNodes;
 
   /// 0..1 draw-in of the route.
   final Animation<double> routeProgress;
@@ -926,6 +937,7 @@ class _MuseumMapCanvasState extends State<MuseumMapCanvas>
   List<(String, Path)> _extraFloors = const [];
   double _maxHeight = 0;
   List<Float64List> _routeGeo = const [];
+  List<Float64List> _walkedGeo = const [];
 
   List<({MapPlace place, int prio})> _sorted = const [];
 
@@ -1001,7 +1013,7 @@ class _MuseumMapCanvasState extends State<MuseumMapCanvas>
       _liftTo = widget.selectedRegionId;
       _liftCtl.forward(from: 0);
     }
-    if (!_sameLegs(old.legs, widget.legs)) _buildRoute();
+    if (!_sameLegs(old.legs, widget.legs) || !_sameLegs(old.walkedLegs, widget.walkedLegs)) _buildRoute();
     _sortPins();
     _rebuildLabels();
     _syncLoop();
@@ -1375,9 +1387,14 @@ class _MuseumMapCanvasState extends State<MuseumMapCanvas>
   /// Route legs, densified, with the ground height under each step, so the
   /// ribbon climbs onto roofs instead of hiding under them.
   void _buildRoute() {
+    _routeGeo = _routeGeoOf(widget.legs);
+    _walkedGeo = _routeGeoOf(widget.walkedLegs);
+  }
+
+  List<Float64List> _routeGeoOf(List<RouteLeg> legs) {
     final px = _px;
     final out = <Float64List>[];
-    for (final leg in widget.legs) {
+    for (final leg in legs) {
       final v = <double>[];
       for (var i = 0; i < leg.points.length; i++) {
         final b = leg.points[i];
@@ -1406,7 +1423,7 @@ class _MuseumMapCanvasState extends State<MuseumMapCanvas>
       }
       out.add(Float64List.fromList(v));
     }
-    _routeGeo = out;
+    return out;
   }
 
   // ── artwork: recoloured SVG -> bitmap ──────────────────────────
@@ -1501,10 +1518,11 @@ class _MuseumMapCanvasState extends State<MuseumMapCanvas>
     required bool selected,
     required bool target,
     required bool pinned,
+    bool stop = false,
   }) {
     if (selected) return 0;
     if (target) return 1;
-    if (pinned) return 2;
+    if (pinned || stop) return 2;
     return switch (p.category) {
       PlaceCategory.attraction ||
       PlaceCategory.gallery ||
@@ -1527,6 +1545,7 @@ class _MuseumMapCanvasState extends State<MuseumMapCanvas>
                 selected: p.id == sel?.id,
                 target: p.id == widget.routeTargetId,
                 pinned: widget.pinned.contains(p.id),
+                stop: widget.stopNodes.containsKey(p.id),
               ),
             ),
         ]..sort(
@@ -1943,7 +1962,7 @@ class _MuseumMapCanvasState extends State<MuseumMapCanvas>
     final sel = widget.selected;
     _pinRects = [
       for (final c in pins)
-        _pinBox(c.place, c.screen, selected: c.place.id == sel?.id),
+        _pinBox(c.place, c.screen, selected: c.place.id == sel?.id || _stopOf(c.place.id)?.state == StopState.current),
     ];
     return Stack(
       clipBehavior: Clip.none,
@@ -2025,7 +2044,7 @@ class _MuseumMapCanvasState extends State<MuseumMapCanvas>
         if (clash) continue;
       }
       placedBoxes.add(
-        _pinBox(pl, s, selected: pl.id == widget.selected?.id).inflate(
+        _pinBox(pl, s, selected: pl.id == widget.selected?.id || _stopOf(pl.id)?.state == StopState.current).inflate(
           (pl.category.isDense ? 0.5 : 2.0),
         ),
       );
@@ -2056,10 +2075,20 @@ class _MuseumMapCanvasState extends State<MuseumMapCanvas>
             selected: sel?.id == c.place.id,
             pinned: widget.pinned.contains(c.place.id),
             target: widget.routeTargetId == c.place.id,
+            stop: _stopOf(c.place.id),
             onTap: () => widget.onPlaceTap(c.place),
           ),
         ),
     ];
+  }
+
+  /// The place's mark in the walk being followed, if it is one of its stops.
+  PinStop? _stopOf(String placeId) {
+    final t = widget.trip, node = widget.stopNodes[placeId];
+    if (t == null || node == null) return null;
+    final n = t.numberOf(node), state = t.stateOf(node);
+    if (n == null || state == null) return null;
+    return (number: n, total: t.total, state: state, last: n == t.total);
   }
 
   List<Widget> _markers(Matrix4 full, GemPalette p) {
@@ -2767,17 +2796,37 @@ class _IsoPainter extends CustomPainter {
   }
 
   void _route(Canvas canvas, Matrix4 full) {
-    final legs = s.widget.legs;
-    if (legs.isEmpty) return;
-    final prog = s.widget.routeProgress.value.clamp(0.0, 1.0);
-    final phase = s._loop.value * 30;
-
     Paint stroke(Color c, double w) => Paint()
       ..color = c
       ..style = PaintingStyle.stroke
       ..strokeWidth = w
       ..strokeCap = StrokeCap.round
       ..strokeJoin = StrokeJoin.round;
+
+    // The part of a walk already behind the visitor: thin grey dashes on the
+    // route's outline colour, so it reads as "been there" next to the bright
+    // line ahead, on the day and the night plan alike.
+    for (final g in s._walkedGeo) {
+      final count = g.length ~/ 3;
+      if (count < 2) continue;
+      final path = Path();
+      for (var i = 0; i < count; i++) {
+        final o = project(full, g[i * 3], g[i * 3 + 1], g[i * 3 + 2] + 0.5);
+        i == 0 ? path.moveTo(o.dx, o.dy) : path.lineTo(o.dx, o.dy);
+      }
+      canvas.drawPath(path, stroke(pal.routeCase.withValues(alpha: 0.8), 7));
+      final dash = stroke(pal.muted, 3.5);
+      for (final m in path.computeMetrics()) {
+        for (var d = 0.0; d < m.length; d += 12) {
+          canvas.drawPath(m.extractPath(d, math.min(m.length, d + 6)), dash);
+        }
+      }
+    }
+
+    final legs = s.widget.legs;
+    if (legs.isEmpty) return;
+    final prog = s.widget.routeProgress.value.clamp(0.0, 1.0);
+    final phase = s._loop.value * 30;
 
     for (var li = 0; li < legs.length && li < s._routeGeo.length; li++) {
       final g = s._routeGeo[li];
@@ -3018,11 +3067,13 @@ class _PinHost extends StatelessWidget {
     required this.pinned,
     required this.target,
     required this.onTap,
+    this.stop,
   });
   final MapPlace place;
   final bool selected;
   final bool pinned;
   final bool target;
+  final PinStop? stop;
   final VoidCallback onTap;
 
   @override
@@ -3043,6 +3094,7 @@ class _PinHost extends StatelessWidget {
           isSelected: selected,
           isPinned: pinned,
           isTarget: target,
+          stop: stop,
           onTap: onTap,
         ),
       ),

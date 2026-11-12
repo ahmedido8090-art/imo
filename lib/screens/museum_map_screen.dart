@@ -78,6 +78,12 @@ class _MuseumMapScreenState extends State<MuseumMapScreen>
   /// The Rostau trip being walked (null for the pinned tour or a single route).
   String? _tripId;
 
+  /// How many of [_tourOrder]'s stops are behind the visitor, where they
+  /// started the walk, and the route they have walked so far.
+  int _tripDone = 0;
+  String? _tripStart;
+  RouteResult? _walked;
+
   int _resetTick = 0;
   int _zoomTick = 0;
   double _zoomFactor = 1;
@@ -169,6 +175,8 @@ class _MuseumMapScreenState extends State<MuseumMapScreen>
       'routeTarget': _routeTargetId,
       'tour': _tourOrder,
       'trip': _tripId,
+      'tripDone': _tripDone,
+      'tripStart': _tripStart,
       'views': {
         for (final e in _views.entries)
           if (!e.value.value.isIdentity())
@@ -215,13 +223,15 @@ class _MuseumMapScreenState extends State<MuseumMapScreen>
     final target = Store.get('routeTarget');
     final tour = Store.get('tour');
     final trip = Store.get('trip');
+    final done = Store.get('tripDone'), start = Store.get('tripStart');
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted || _originNode == null) return;
       if (tour is List && tour.isNotEmpty) {
+        if (start is String && _graph.positionOf(start) != null) _tripStart = start;
         _startTour([
           for (final id in tour)
             if (id is String) id,
-        ], quiet: true, tripId: trip is String && RostauLibrary.byId(trip) != null ? trip : null);
+        ], quiet: true, tripId: trip is String && RostauLibrary.byId(trip) != null ? trip : null, resume: done is int ? done : 0);
       } else if (target is String) {
         _routeTo(target, label: S.placeId(target), quiet: true);
       }
@@ -235,9 +245,10 @@ class _MuseumMapScreenState extends State<MuseumMapScreen>
     _replan();
   }
 
+  /// The category picked in the row, and always the stops of the walk.
   List<MapPlace> get _visiblePlaces => _filter == null
       ? _map.places
-      : _map.places.where((p) => p.category == _filter).toList();
+      : _map.places.where((p) => p.category == _filter || _stopNodes.containsKey(p.id)).toList();
 
   /// The galleries of the era picked in the timeline.
   Set<String> get _highlightedIds => _highlightGroup == null
@@ -443,6 +454,9 @@ class _MuseumMapScreenState extends State<MuseumMapScreen>
     setState(() {
       _originNode = id;
       _picking = false;
+      // standing at a stop still ahead: it, and every stop before it, is done
+      final g = _progress;
+      if (g != null) _tripDone = g.at(id).done;
     });
     final mapId = _graph.mapOf(id);
     if (mapId != null && mapId != _map.id) _setMap(mapId);
@@ -478,7 +492,7 @@ class _MuseumMapScreenState extends State<MuseumMapScreen>
   void _replan() {
     if (_originNode == null) return;
     if (_tourOrder != null) {
-      _startTour(_tourOrder!, quiet: true, tripId: _tripId);
+      _planTrip(quiet: true);
     } else if (_routeTargetId != null) {
       _routeTo(_routeTargetId!, label: _routeLabel, quiet: true);
     }
@@ -537,6 +551,7 @@ class _MuseumMapScreenState extends State<MuseumMapScreen>
       _routeTargetId = destId;
       _routeLabel = label;
       _tripId = null;
+      _resetProgress();
     });
     _revealRoute();
     _focusRoute(r, quiet);
@@ -551,10 +566,23 @@ class _MuseumMapScreenState extends State<MuseumMapScreen>
   }
 
   /// Walk [ids] as one route: the pinned tour, or the Rostau trip [tripId].
-  void _startTour(List<String> ids, {bool quiet = false, String? tripId}) {
+  /// A new walk is put in the shortest order from where the visitor stands;
+  /// with [resume] (stops already done) [ids] keep the order given.
+  void _startTour(List<String> ids, {bool quiet = false, String? tripId, int? resume}) {
     final from = _originNode;
     if (from == null) {
       _askOrigin(then: () => _startTour(ids, tripId: tripId));
+      return;
+    }
+    if (resume != null) {
+      setState(() {
+        _tourOrder = ids;
+        _tripDone = resume;
+        _routeTargetId = null;
+        _tripId = tripId;
+        _routeLabel = _tripTitle ?? S.t('my_tour');
+      });
+      _planTrip(quiet: quiet);
       return;
     }
     final t = _graph.tour(from, ids, avoidStairs: _app.avoidStairs);
@@ -573,6 +601,8 @@ class _MuseumMapScreenState extends State<MuseumMapScreen>
       _routeTargetId = null;
       _tripId = tripId;
       _routeLabel = _tripTitle ?? S.t('my_tour');
+      _resetProgress();
+      _tripStart = from;
     });
     _revealRoute();
     _focusRoute(t.route, quiet);
@@ -583,6 +613,66 @@ class _MuseumMapScreenState extends State<MuseumMapScreen>
       );
     }
   }
+
+  TripProgress? get _progress => _tourOrder == null ? null : TripProgress(_tourOrder!, _tripDone);
+
+  void _resetProgress() {
+    _tripDone = 0;
+    _tripStart = null;
+    _walked = null;
+  }
+
+  /// The walk in its planned order: from where the visitor is through the
+  /// stops still ahead, and the part already walked (drawn faded).
+  void _planTrip({bool quiet = false}) {
+    final g = _progress, from = _originNode;
+    if (g == null || from == null) return;
+    final ahead = g.finished ? null : _graph.tour(from, g.remaining, avoidStairs: _app.avoidStairs, optimize: false);
+    final start = _tripStart ?? (g.walked.isEmpty ? null : g.walked.first);
+    final behind = start == null || g.walked.isEmpty ? null : _graph.tour(start, g.walked, avoidStairs: _app.avoidStairs, optimize: false);
+    if (ahead == null && !g.finished && !quiet) {
+      _toast.show(S.t(_app.avoidStairs ? 'no_step_free' : 'no_path'), icon: Icons.block);
+    }
+    setState(() {
+      _route = ahead?.route;
+      _walked = behind?.route;
+    });
+    if (ahead != null) {
+      _revealRoute();
+      _focusRoute(ahead.route, quiet);
+    }
+  }
+
+  /// "Arrived" at the stop that was next: it is done, and the visitor is there.
+  void _arrive() {
+    final g = _progress;
+    final here = g?.next;
+    if (g == null || here == null) return;
+    setState(() {
+      _tripDone = g.arrive().done;
+      _originNode = here;
+    });
+    _planTrip();
+  }
+
+  /// The place a stop of the walk stands for. [_tourOrder] holds routing nodes,
+  /// and a few places are reached through another node (kRouteRedirects).
+  String _stopPlace(String node) {
+    if (placeById(node) != null) return node;
+    final listed = _trip?.stops ?? _pinned;
+    String? any;
+    for (final e in kRouteRedirects.entries) {
+      if (e.value != node) continue;
+      if (listed.contains(e.key)) return e.key;
+      any ??= e.key;
+    }
+    return any ?? node;
+  }
+
+  /// Place id -> its stop's node, for every stop of the walk.
+  Map<String, String> get _stopNodes => {
+    for (final n in _tourOrder ?? const <String>[]) _stopPlace(n): n,
+  };
 
   /// Make sure the part of the route you are about to follow is on screen.
   void _focusRoute(RouteResult r, bool quiet) {
@@ -599,6 +689,7 @@ class _MuseumMapScreenState extends State<MuseumMapScreen>
       _routeTargetId = null;
       _tourOrder = null;
       _tripId = null;
+      _resetProgress();
     });
     _routeAnim.reset();
   }
@@ -796,6 +887,9 @@ class _MuseumMapScreenState extends State<MuseumMapScreen>
                   selectedRegionId: _selectedRegionId,
                   pinned: _pinned,
                   legs: legs,
+                  walkedLegs: _walked?.legsOn(_map.id) ?? const <RouteLeg>[],
+                  trip: _progress,
+                  stopNodes: _stopNodes,
                   routeProgress: _routeProgress,
                   routeTargetId: _routeTargetId,
                   originMapId: _originMapId,
@@ -970,11 +1064,11 @@ class _MuseumMapScreenState extends State<MuseumMapScreen>
                         duration: const Duration(milliseconds: 260),
                         curve: Curves.easeOutCubic,
                         alignment: Alignment.bottomCenter,
-                        child: _route == null
+                        child: _route == null && _tourOrder == null
                             ? const SizedBox(width: double.infinity)
                             : Padding(
                                 padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
-                                child: _routeCard(p),
+                                child: _tourOrder != null ? _tripCard(p) : _routeCard(p),
                               ),
                       ),
                       if (galleries) ...[
@@ -1055,16 +1149,145 @@ class _MuseumMapScreenState extends State<MuseumMapScreen>
     ),
   );
 
+  /// The walk being followed, readable at a glance: the stop to go to now and
+  /// its number, where the walk ends, how many stops are done (in words and as
+  /// a row of segments), and "Arrived" to tick the stop off. Tap it for the
+  /// directions to the next stop.
+  Widget _tripCard(GemPalette p) {
+    final g = _progress!;
+    final next = g.next, finish = g.finish;
+    // a trip by its title alone ("The Great House"), so it fits the card
+    final name = _trip == null ? S.t('my_tour') : splitTripTitle(_trip!, S.lang).$2;
+    final title = next == null
+        ? S.t('trip_complete')
+        : S.t('trip_next', x: '${S.t('stop_of', n: g.nextNumber, x: '${g.total}')} — ${S.placeId(_stopPlace(next))}');
+    final meta = [
+      S.t('trip_done_of', n: g.done, x: '${g.total}'),
+      if (next != null && finish != null) S.t('trip_finish', x: S.placeId(_stopPlace(finish))) else name,
+    ].join(' · ');
+    final text = TextStyle(fontFamily: 'Arial', fontSize: 12, color: p.muted);
+    return Container(
+      decoration: BoxDecoration(
+        color: p.surface,
+        borderRadius: BorderRadius.circular(26),
+        border: Border.all(color: p.line.withValues(alpha: .8)),
+        boxShadow: gemShadow(p, lift: 1.3),
+      ),
+      child: Material(
+        type: MaterialType.transparency,
+        child: InkWell(
+          onTap: _route == null ? null : _openDirections,
+          borderRadius: BorderRadius.circular(26),
+          child: Padding(
+            padding: const EdgeInsetsDirectional.fromSTEB(12, 10, 6, 10),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Row(
+                  children: [
+                    // done / total, as a ring
+                    SizedBox(
+                      width: 42,
+                      height: 42,
+                      child: Stack(
+                        alignment: Alignment.center,
+                        children: [
+                          Positioned.fill(
+                            child: CircularProgressIndicator(
+                              value: g.total == 0 ? 0 : g.done / g.total,
+                              strokeWidth: 4,
+                              color: p.accent,
+                              backgroundColor: p.accent.withValues(alpha: .14),
+                            ),
+                          ),
+                          next == null
+                              ? Icon(Icons.check, color: p.accent, size: 22)
+                              : Text(
+                                  '${g.done}/${g.total}',
+                                  style: TextStyle(fontFamily: 'Arial', fontSize: 12, fontWeight: FontWeight.w800, color: p.ink),
+                                ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            title,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(fontFamily: 'Arial', fontSize: 15, height: 1.2, color: p.ink, fontWeight: FontWeight.w800),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(meta, maxLines: 1, overflow: TextOverflow.ellipsis, style: text),
+                        ],
+                      ),
+                    ),
+                    IconButton(
+                      onPressed: _clearRoute,
+                      tooltip: S.t('clear_route'),
+                      icon: Icon(Icons.close, color: p.muted, size: 20),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    // one segment per stop: done, the one to go to now, still ahead
+                    Expanded(
+                      child: Row(
+                        children: [
+                          for (var i = 0; i < g.total; i++)
+                            Expanded(
+                              child: Container(
+                                height: 6,
+                                margin: const EdgeInsetsDirectional.only(end: 3),
+                                decoration: BoxDecoration(
+                                  color: i < g.done
+                                      ? p.accent
+                                      : i == g.done
+                                      ? p.rose
+                                      : p.line,
+                                  borderRadius: BorderRadius.circular(3),
+                                ),
+                              ),
+                            ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(width: 9),
+                    Tooltip(
+                      message: next == null ? '' : S.t('arrived_hint'),
+                      child: FilledButton.icon(
+                        onPressed: next == null ? _clearRoute : _arrive,
+                        icon: Icon(next == null ? Icons.flag : Icons.check, size: 18),
+                        label: Text(S.t(next == null ? 'end_trip' : 'arrived')),
+                        style: gemFilled(context).copyWith(
+                          padding: const WidgetStatePropertyAll(
+                            EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   /// One calm card: where to, how far, and a clear "Start". Tap it for the directions.
   Widget _routeCard(GemPalette p) {
     final r = _route!;
-    final title = _tourOrder != null
-        // a trip by its title alone ("The Great House"), so it fits the card
-        ? (_trip == null ? S.t('tour') : splitTripTitle(_trip!, S.lang).$2)
-        : S.t('to_x', x: _routeLabel);
-    // the stop count lives with the distance, where a long title cannot hide it
+    final title = S.t('to_x', x: _routeLabel);
     final meta = [
-      if (_tourOrder != null) S.count('stops', _tourOrder!.length),
       S.distance(r.meters),
       S.minutes(r.walkTime),
     ].join(' · ');
