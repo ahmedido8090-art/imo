@@ -11,6 +11,7 @@
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
 import 'package:imo/app.dart';
@@ -40,8 +41,13 @@ Future<void> shot(WidgetTester t, String name) async {
 }
 
 Future<void> tapText(WidgetTester t, String text, {bool last = false}) async {
-  final f = find.text(text);
-  await t.tap(last ? f.last : f.first, warnIfMissed: false);
+  final f = last ? find.text(text).last : find.text(text).first;
+  // on a small phone the row may be below the fold of its sheet
+  if (find.ancestor(of: f, matching: find.byType(Scrollable)).evaluate().isNotEmpty) {
+    await t.ensureVisible(f);
+    await _settle(t, 300);
+  }
+  await t.tap(f, warnIfMissed: false);
   await _settle(t, 600);
 }
 
@@ -214,7 +220,8 @@ void main() {
       await relaunch(t);
       expect(Store.get('trip'), 'duat');
       await shot(t, 'r05_trip_restored');
-      await tapText(t, 'Start');
+      await t.tap(find.textContaining('Next: Stop').first); // the trip banner opens the directions
+      await _settle(t, 600);
       await shot(t, 'r06_trip_directions');
       await back(t);
 
@@ -265,6 +272,159 @@ void main() {
       await shot(t, 'r14_trips_dark');
       await back(t);
       AppState.instance.setThemeMode(ThemeMode.light);
+    }
+
+    if (_run('mosque')) {
+      await launch(t);
+      await tapText(t, 'Building');
+      await shot(t, 'm01_building');
+      await tapTip(t, 'Where am I?');
+      await tapText(t, 'Ticketing & Entrance', last: true);
+      await t.tap(find.text('Search places, galleries, shops…'));
+      await _settle(t);
+      await t.enterText(find.byType(TextField), 'prayer');
+      await _settle(t);
+      await tapText(t, 'Prayer Room', last: true);
+      await tapText(t, 'Start route');
+      await tapText(t, 'Building');
+      await shot(t, 'm02_route_to_prayer_room');
+      await t.tap(find.text('Search places, galleries, shops…'));
+      await _settle(t);
+      await t.enterText(find.byType(TextField), 'prayer');
+      await _settle(t);
+      await tapText(t, 'Prayer Room', last: true);
+      await tapText(t, "I'm here");
+      await tapTip(t, 'Where am I?'); // known now: flies to the marker
+      await shot(t, 'm03_mosque_close');
+      await tapTip(t, 'Zoom in');
+      await shot(t, 'm04_mosque_closer');
+      AppState.instance.setThemeMode(ThemeMode.dark);
+      await shot(t, 'm05_mosque_dark');
+      AppState.instance.setThemeMode(ThemeMode.light);
+      // browsing: the next room along is where you are, the mosque has a plain pin
+      await tapTip(t, 'Clear route');
+      await t.tap(find.text('Search places, galleries, shops…'));
+      await _settle(t);
+      await t.enterText(find.byType(TextField), 'clinic');
+      await _settle(t);
+      await tapText(t, 'Clinic', last: true);
+      await tapText(t, "I'm here");
+      await tapTip(t, 'Where am I?');
+      await tapTip(t, 'Zoom in');
+      await shot(t, 'm06_mosque_browse');
+      await tapTip(t, 'Settings');
+      await tapText(t, 'Turn map 90°');
+      await tapTip(t, 'Where am I?');
+      await tapTip(t, 'Zoom in');
+      await shot(t, 'm07_mosque_turned');
+    }
+
+    if (_run('trip')) {
+      // a whole trip, stop by stop: where you have been, where you go now, where it ends
+      await launch(t);
+      await tapTip(t, 'Where am I?');
+      await tapText(t, 'Ticketing & Entrance', last: true);
+      await tapTip(t, 'Rostau trips');
+      await tapText(t, 'The Great House');
+      await tapText(t, 'Start this trip');
+      await shot(t, 't00_start');
+      for (var i = 1; i <= 6; i++) {
+        await tapText(t, 'Arrived');
+        await _settle(t, 1200);
+        await shot(t, 't0${i}_arrived_$i');
+        if (i == 3) {
+          AppState.instance.setThemeMode(ThemeMode.dark);
+          await shot(t, 't0${i}b_dark');
+          AppState.instance.setThemeMode(ThemeMode.light);
+          AppState.instance.setLang(AppLang.ar);
+          await shot(t, 't0${i}c_arabic');
+          AppState.instance.setLang(AppLang.en);
+          await relaunch(t);
+          expect(Store.get('tripDone'), 3);
+          await shot(t, 't0${i}d_restored');
+          await tapText(t, 'Galleries');
+          await shot(t, 't0${i}e_galleries');
+        }
+      }
+      expect(find.text('Trip complete'), findsOneWidget);
+    }
+
+    if (_run('era')) {
+      // the timeline chips light their galleries on the plan
+      await launch(t);
+      await tapText(t, 'Galleries');
+      await shot(t, 'e00_none');
+      for (final c in ['01–03', '04–06', '07–09', '10–12']) {
+        await tapText(t, c);
+        await shot(t, 'e_${c.replaceAll('–', '_')}');
+      }
+      await tapText(t, '10–12'); // again: off
+      await shot(t, 'e05_cleared');
+      await tapText(t, 'Galleries'); // the category filter (the tab is the last one)
+      await tapText(t, '04–06');
+      await shot(t, 'e06_filter_on');
+      await tapText(t, 'All');
+      await shot(t, 'e07_filter_off');
+      // with a trip running, and at night
+      await tapTip(t, 'Where am I?');
+      await tapText(t, 'Ticketing & Entrance', last: true);
+      await tapTip(t, 'Rostau trips');
+      await tapText(t, 'The Great House');
+      await tapText(t, 'Start this trip');
+      await tapText(t, 'Galleries', last: true);
+      await tapText(t, '07–09');
+      await shot(t, 'e08_with_route');
+      AppState.instance.setThemeMode(ThemeMode.dark);
+      await shot(t, 'e09_dark');
+      AppState.instance.setThemeMode(ThemeMode.light);
+    }
+
+    if (_run('fixes')) {
+      await launch(t);
+      await shot(t, 'f01_complex');
+      await tapText(t, 'Galleries');
+      await tapText(t, '01–03');
+      await shot(t, 'f02_era_01_03');
+      await tapText(t, '04–06');
+      await shot(t, 'f03_era_04_06');
+      await tapText(t, '04–06');
+      await tapText(t, 'Complex');
+
+      // a few pins, then a trip on top of them
+      for (final (q, name) in [('mask', 'Golden funerary mask'), ('throne', 'Golden throne'), ('Ramesses', 'Colossal Statue of Ramesses II')]) {
+        await t.tap(find.text('Search places, galleries, shops…'));
+        await _settle(t);
+        await t.enterText(find.byType(TextField), q);
+        await _settle(t);
+        await tapText(t, name, last: true);
+        await tapText(t, 'Pin');
+        await back(t);
+      }
+      await shot(t, 'f04_pins');
+      await tapTip(t, 'Rostau trips');
+      await tapText(t, 'The Great House');
+      await tapText(t, 'Choose where you start');
+      await tapText(t, 'Ticketing & Entrance', last: true);
+      await shot(t, 'f05_trip_planned');
+      await tapText(t, 'Start this trip');
+      await shot(t, 'f06_trip_complex');
+      await tapText(t, 'Building');
+      await shot(t, 'f07_trip_building');
+      await tapText(t, 'Galleries');
+      await shot(t, 'f08_trip_galleries');
+      await tapText(t, '07–09');
+      await shot(t, 'f09_trip_galleries_era');
+      await tapTip(t, 'My tour');
+      await shot(t, 'f10_tour_during_trip');
+      await back(t);
+      await tapTip(t, 'Rostau trips');
+      await shot(t, 'f11_trips_during_trip');
+      await back(t);
+      await SystemChrome.setPreferredOrientations([DeviceOrientation.landscapeLeft]);
+      await _settle(t, 1500);
+      await shot(t, 'f12_trip_landscape');
+      await SystemChrome.setPreferredOrientations([]);
+      await _settle(t, 1500);
     }
   });
 }
